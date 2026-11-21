@@ -16,7 +16,7 @@
     del(k) { try { localStorage.removeItem("vc." + k); } catch (e) {} },
   };
   const conf = () => ({
-    clientId: (S.get("clientId", "") || CFG.clientId || "").trim(),
+    clientId: (/\.apps\.googleusercontent\.com$/.test((S.get("clientId", "") || "").trim()) ? S.get("clientId", "").trim() : (CFG.clientId || "").trim()),
     folderName: S.get("folderName", CFG.folderName) || CFG.folderName,
     autoStart: S.get("autoStart", false),
     keepAwake: S.get("keepAwake", true),
