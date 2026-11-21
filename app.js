@@ -237,6 +237,14 @@
     if (r.status === 401) { S.del("token"); throw new AuthError("expired"); }
     return r;
   }
+  async function why(r, what) {
+    let msg = "", reason = "";
+    try { const j = await r.clone().json(); msg = (j.error && j.error.message) || ""; reason = (j.error && j.error.errors && j.error.errors[0] && j.error.errors[0].reason) || (j.error && j.error.status) || ""; } catch (e) {}
+    if (/accessNotConfigured|SERVICE_DISABLED|has not been used|is disabled/i.test(reason + " " + msg)) return "Google Drive API is off in your Google Cloud project; turn it on there";
+    if (/insufficient|PERMISSION_DENIED.*scope|ACCESS_TOKEN_SCOPE/i.test(reason + " " + msg)) return "Drive permission wasn't granted; disconnect and reconnect, ticking the Drive box";
+    if (/domain|admin|policy/i.test(reason + " " + msg)) return "this Google account's administrator blocks the app; try a personal account";
+    return `${what} ${r.status}${msg ? ": " + msg.slice(0, 120) : ""}`;
+  }
   async function fetchEmail() {
     try { const r = await api("GET", "https://www.googleapis.com/drive/v3/about?fields=user(emailAddress)"); if (r.ok) { const j = await r.json(); S.set("email", j.user && j.user.emailAddress || ""); } } catch (e) {}
   }
@@ -249,12 +257,12 @@
     }
     const q = `name = '${name.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
     const r = await api("GET", "https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=10&fields=files(id,name)&q=" + encodeURIComponent(q));
-    if (!r.ok) throw new Error("folder lookup " + r.status);
+    if (!r.ok) throw new Error(await why(r, "folder lookup"));
     let fid = ((await r.json()).files || [])[0];
     fid = fid && fid.id;
     if (!fid) {
       const c = await api("POST", "https://www.googleapis.com/drive/v3/files?fields=id", { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name, mimeType: "application/vnd.google-apps.folder" }) });
-      if (!c.ok) throw new Error("folder create " + c.status);
+      if (!c.ok) throw new Error(await why(c, "folder create"));
       fid = (await c.json()).id;
     }
     S.set("folderId", fid); S.set("folderFor", name);
@@ -287,7 +295,7 @@
       const r = await api("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name", {
         headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": baseMime(m.mime), "X-Upload-Content-Length": String(total) }, body: JSON.stringify(meta),
       });
-      if (!r.ok) throw new Error("couldn't start upload (" + r.status + ")");
+      if (!r.ok) throw new Error(await why(r, "couldn't start upload"));
       const loc = r.headers.get("Location"); if (!loc) throw new Error("no upload address returned");
       m.session = loc; m.sessionTotal = total; await DB.putRec(m);
     }
