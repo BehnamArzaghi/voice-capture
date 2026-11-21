@@ -6,6 +6,7 @@
   const APP_URL = location.origin + location.pathname.replace(/index\.html$/, "");
   const CHUNK_MS = 4000;                 // each 4 s of audio is written to the phone as it is recorded
   const UPLOAD_CHUNK = CFG.uploadChunk || 5 * 1024 * 1024;  // resumable upload piece (multiple of 256 KiB)
+  const PART_LIMIT = CFG.partLimit || 9000000;  // long recordings are also saved as pieces under this size (see "parts")
   const NOSLEEP_MP4 = "data:video/mp4;base64,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";
   const $ = (id) => document.getElementById(id);
 
@@ -281,45 +282,130 @@
     });
   }
   const rangeEnd = (h) => { const m = /bytes=0-(\d+)/.exec(h || ""); return m ? +m[1] + 1 : 0; };
-  async function uploadOne(m) {
-    const blob = await assemble(m), total = blob.size;
-    if (!total) throw new Error("empty recording");
+  const hex = (b) => Array.from(new Uint8Array(b), (x) => x.toString(16).padStart(2, "0")).join("");
+  // One Drive resumable upload. `st` is kept inside the recording's record, so a dropped connection or a
+  // closed app carries on from where Drive says it stopped. `meta` is only called when a new session is needed.
+  async function resumable(m, st, blob, meta, onProgress) {
+    const total = blob.size;
     const auth = () => { const t = Auth.token(); return t ? { Authorization: "Bearer " + t } : {}; };
-    if (!m.session || m.sessionTotal !== total) {
-      const folder = await ensureFolder();
-      const meta = {
-        name: m.name + extFor(m.mime), parents: [folder], mimeType: baseMime(m.mime),
-        description: `Recorded ${new Date(m.startedAt).toString()} · ${fmtDur(m.duration)} · Voice capture`,
-        appProperties: { app: "voice-capture", recId: m.id, recordedAt: new Date(m.startedAt).toISOString(), durationSec: String(Math.round(m.duration)), processing: m.processing || "raw" },
-      };
+    const result = (x) => { let j = {}; try { j = JSON.parse(x.responseText || "{}"); } catch (e) {} return j; };
+    const expired = async () => { delete st.session; await DB.putRec(m); return new Error("upload expired; starting over"); };
+    if (!st.session || st.total !== total) {
       const r = await api("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name", {
-        headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": baseMime(m.mime), "X-Upload-Content-Length": String(total) }, body: JSON.stringify(meta),
+        headers: { "Content-Type": "application/json; charset=UTF-8", "X-Upload-Content-Type": blob.type || "application/octet-stream", "X-Upload-Content-Length": String(total) }, body: JSON.stringify(await meta()),
       });
       if (!r.ok) throw new Error(await why(r, "couldn't start upload"));
       const loc = r.headers.get("Location"); if (!loc) throw new Error("no upload address returned");
-      m.session = loc; m.sessionTotal = total; await DB.putRec(m);
+      st.session = loc; st.total = total; await DB.putRec(m);
     }
     // ask Drive how much it already has (resumes after a drop or app restart)
     let off = 0;
-    const q = await xhr("PUT", m.session, Object.assign({ "Content-Range": `bytes */${total}` }, auth()), null);
-    if (q.status === 200 || q.status === 201) return complete(m, q);
+    const q = await xhr("PUT", st.session, Object.assign({ "Content-Range": `bytes */${total}` }, auth()), null);
+    if (q.status === 200 || q.status === 201) return result(q);
     if (q.status === 308) off = rangeEnd(q.getResponseHeader("Range"));
-    else if (q.status === 404 || q.status === 410) { delete m.session; await DB.putRec(m); throw new Error("upload expired; starting over"); }
+    else if (q.status === 404 || q.status === 410) throw await expired();
     else if (q.status === 401) { S.del("token"); throw new AuthError("expired"); }
     while (off < total) {
-      const end = Math.min(off + UPLOAD_CHUNK, total);
-      const r = await xhr("PUT", m.session, Object.assign({ "Content-Range": `bytes ${off}-${end - 1}/${total}` }, auth()), blob.slice(off, end),
-        (n) => { progress[m.id] = (off + n) / total; paintProgress(m.id); });
-      if (r.status === 308) { off = rangeEnd(r.getResponseHeader("Range")); progress[m.id] = off / total; paintProgress(m.id); continue; }
-      if (r.status === 200 || r.status === 201) return complete(m, r);
-      if (r.status === 404 || r.status === 410) { delete m.session; await DB.putRec(m); throw new Error("upload expired; starting over"); }
+      const end = Math.min(off + UPLOAD_CHUNK, total), from = off;
+      const r = await xhr("PUT", st.session, Object.assign({ "Content-Range": `bytes ${off}-${end - 1}/${total}` }, auth()), blob.slice(off, end), (n) => onProgress(from + n));
+      if (r.status === 308) { off = rangeEnd(r.getResponseHeader("Range")); onProgress(off); continue; }
+      if (r.status === 200 || r.status === 201) return result(r);
+      if (r.status === 404 || r.status === 410) throw await expired();
       if (r.status === 401) { S.del("token"); throw new AuthError("expired"); }
       throw new Error("upload failed (" + r.status + ")");
     }
+    throw new Error("upload ended early; will check with Drive and continue");
   }
-  async function complete(m, x) {
-    let j = {}; try { j = JSON.parse(x.responseText || "{}"); } catch (e) {}
-    m.status = "uploaded"; m.driveId = j.id || m.driveId; m.uploadedAt = Date.now(); delete m.session; delete m.lastError;
+  async function uploadOne(m) {
+    if (m.session) { m.up = { session: m.session, total: m.sessionTotal }; delete m.session; delete m.sessionTotal; } // begun by an earlier version
+    const blob = await assemble(m), total = blob.size;
+    if (!total) throw new Error("empty recording");
+    const show = (f) => { progress[m.id] = f; paintProgress(m.id); };
+    if (m.status === "saved") {
+      m.up = m.up || {};
+      const j = await resumable(m, m.up, blob, async () => ({
+        name: m.name + extFor(m.mime), parents: [await ensureFolder()], mimeType: baseMime(m.mime),
+        description: `Recorded ${new Date(m.startedAt).toString()} · ${fmtDur(m.duration)} · Voice capture`,
+        appProperties: { app: "voice-capture", recId: m.id, recordedAt: new Date(m.startedAt).toISOString(), durationSec: String(Math.round(m.duration)), processing: m.processing || "raw" },
+      }), (n) => show(n / total));
+      m.driveId = j.id || m.driveId; delete m.up;
+      if (total <= PART_LIMIT) return uploaded(m);
+      m.status = "parts"; await DB.putRec(m); show(0); render();
+    }
+    if (m.status === "parts") return uploadParts(m, blob, show);
+  }
+
+  // ---------------------------------------------------------------- parts: a long recording is also saved as pieces under 9 MB,
+  // because Claude's Google Drive connector downloads at most 10 MB per file.
+  // iPhone recordings are fragmented MP4: a header (ftyp + moov), then one fragment (moof + mdat) per ~4 s.
+  // Each piece is the header plus a run of whole fragments, so every piece plays on its own, and the original
+  // is piece 1 followed by every later piece without its header, byte for byte (SHA-256 recorded to check).
+  function splitPlan(buf, limit) {
+    const v = new DataView(buf), n = buf.byteLength, boxes = [];
+    for (let off = 0; off < n; ) {
+      if (off + 8 > n) return null;
+      let size = v.getUint32(off);
+      const type = String.fromCharCode(v.getUint8(off + 4), v.getUint8(off + 5), v.getUint8(off + 6), v.getUint8(off + 7));
+      if (size === 1) { if (off + 16 > n) return null; size = Number(v.getBigUint64(off + 8)); } else if (size === 0) size = n - off;
+      if (size < 8 || off + size > n) return null;
+      boxes.push({ type, a: off, b: off + size }); off += size;
+    }
+    const first = boxes.findIndex((x) => x.type === "moof");
+    if (first < 1) return null;
+    const header = boxes[first].a, room = limit - header, frags = [];
+    for (const x of boxes.slice(first)) { if (x.type === "moof") frags.push([x.a, x.b]); else frags[frags.length - 1][1] = x.b; }
+    if (room <= 0 || frags.some(([a, b]) => b - a > room)) return null;
+    const ranges = []; let s = frags[0][0], e = s;
+    for (const [a, b] of frags) { if (b - s > room) { ranges.push([s, e]); s = a; } e = b; }
+    ranges.push([s, e]);
+    return { header, ranges };
+  }
+  async function ensurePartsFolder() {
+    const parent = await ensureFolder(), id = S.get("partsFolderId", null);
+    if (id && S.get("partsFor", "") === parent) {
+      const r = await api("GET", `https://www.googleapis.com/drive/v3/files/${id}?fields=id,trashed`);
+      if (r.ok && !(await r.json()).trashed) return id;
+    }
+    const q = `name = 'Parts' and '${parent}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const r = await api("GET", "https://www.googleapis.com/drive/v3/files?spaces=drive&pageSize=10&fields=files(id,name)&q=" + encodeURIComponent(q));
+    if (!r.ok) throw new Error(await why(r, "parts folder lookup"));
+    let fid = ((await r.json()).files || [])[0]; fid = fid && fid.id;
+    if (!fid) {
+      const c = await api("POST", "https://www.googleapis.com/drive/v3/files?fields=id", { headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        name: "Parts", mimeType: "application/vnd.google-apps.folder", parents: [parent],
+        description: "Long recordings cut into pieces under 9 MB for processing. The full recordings are in the folder above." }) });
+      if (!c.ok) throw new Error(await why(c, "parts folder create"));
+      fid = (await c.json()).id;
+    }
+    S.set("partsFolderId", fid); S.set("partsFor", parent);
+    return fid;
+  }
+  const partName = (m, i, n) => `${m.name} · part ${i + 1} of ${n}${extFor(m.mime)}`;
+  async function uploadParts(m, blob, show) {
+    if (!m.parts) {
+      const buf = await blob.arrayBuffer(), plan = splitPlan(buf, PART_LIMIT);
+      if (!plan) { m.partsSkipped = "not a fragmented MP4"; return uploaded(m); }
+      m.parts = { n: plan.ranges.length, header: plan.header, ranges: plan.ranges, sha256: hex(await crypto.subtle.digest("SHA-256", buf)), ids: [], up: {} };
+      await DB.putRec(m);
+    }
+    const P = m.parts, mime = baseMime(m.mime);
+    const sizes = P.ranges.map(([a, b]) => P.header + b - a), all = sizes.reduce((x, y) => x + y, 0);
+    for (let i = P.ids.length; i < P.n; i++) {
+      const [a, b] = P.ranges[i], before = sizes.slice(0, i).reduce((x, y) => x + y, 0);
+      const piece = new Blob([blob.slice(0, P.header), blob.slice(a, b)], { type: mime });
+      const j = await resumable(m, P.up, piece, async () => ({
+        name: partName(m, i, P.n), parents: [await ensurePartsFolder()], mimeType: mime,
+        description: `Part ${i + 1} of ${P.n} of “${m.name}”${m.driveId ? ` (Drive file ${m.driveId})` : ""}. Each part plays on its own. The original is part 1 followed by each later part without its first ${P.header} bytes. SHA-256 of the original: ${P.sha256}`,
+        appProperties: { app: "voice-capture", recId: m.id, partOf: m.driveId || "", part: String(i + 1), parts: String(P.n), headerBytes: String(P.header), sha256: P.sha256 },
+      }), (k) => show((before + k) / all));
+      P.ids.push(j.id || ""); P.up = {}; await DB.putRec(m);
+    }
+    return uploaded(m);
+  }
+  async function uploaded(m) {
+    m.status = "uploaded"; m.uploadedAt = Date.now();
+    ["up", "lastError", "tries", "retryAt"].forEach((k) => delete m[k]);
+    if (m.parts) delete m.parts.up;
     await DB.putRec(m); delete progress[m.id];
   }
   const Queue = {
@@ -328,7 +414,7 @@
       if (this.running || cur) return;
       this.running = true;
       try {
-        const waiting = (await DB.allRecs()).filter((m) => m.status === "saved").sort((a, b) => a.startedAt - b.startedAt);
+        const waiting = (await DB.allRecs()).filter((m) => m.status === "saved" || m.status === "parts").sort((a, b) => a.startedAt - b.startedAt);
         if (!waiting.length) { this.needAuth = false; return; }
         if (!navigator.onLine) return;
         if (!Auth.token()) { this.needAuth = true; maybeSilentSignIn(); return; }
@@ -377,9 +463,9 @@
     $("acct").className = "chip " + (signed ? "ok" : "off");
     $("acct").textContent = signed ? (email || "Google Drive") : (email ? "Sign-in needed" : "Not connected");
     const recs = (await DB.allRecs()).filter((m) => m.status !== "recording").sort((a, b) => b.startedAt - a.startedAt);
-    const waiting = recs.filter((m) => m.status === "saved").length;
+    const waiting = recs.filter((m) => m.status === "saved" || m.status === "parts").length, onlyParts = waiting && !recs.some((m) => m.status === "saved");
     if (!recording) {
-      $("sub").textContent = waiting ? (Queue.needAuth ? `${waiting} waiting · sign in to Google to upload` : !navigator.onLine ? `${waiting} waiting · will upload when back online` : `${waiting} uploading to “${conf().folderName}”`)
+      $("sub").textContent = onlyParts && !Queue.needAuth && navigator.onLine ? `In “${conf().folderName}” · sending pieces for processing` : waiting ? (Queue.needAuth ? `${waiting} waiting · sign in to Google to upload` : !navigator.onLine ? `${waiting} waiting · will upload when back online` : `${waiting} uploading to “${conf().folderName}”`)
         : recs.length ? `Everything is in “${conf().folderName}”.` : "Recordings are kept on this phone until they reach Google Drive.";
     }
     $("syncBtn").hidden = !waiting || recording;
@@ -387,13 +473,14 @@
     const list = $("list");
     if (!recs.length) { list.innerHTML = `<div class="empty">No recordings yet.</div>`; return; }
     list.innerHTML = recs.slice(0, 60).map((m) => {
-      const up = m.status === "uploaded", busy = progress[m.id] != null;
-      const badge = up ? `<span class="badge b-up">In Drive</span>` : busy ? `<span class="badge b-go">Uploading</span>` : m.lastError ? `<span class="badge b-err">Will retry</span>` : `<span class="badge b-wait">On phone</span>`;
+      const up = m.status === "uploaded", parts = m.status === "parts", busy = progress[m.id] != null, P = m.parts;
+      const badge = up ? `<span class="badge b-up">In Drive</span>` : busy ? `<span class="badge b-go">${parts ? "Sending parts" : "Uploading"}</span>` : m.lastError ? `<span class="badge b-err">Will retry</span>` : `<span class="badge b-wait">${parts ? "Parts waiting" : "On phone"}</span>`;
+      const partsNote = parts && P ? ` · part ${Math.min(P.ids.length + 1, P.n)} of ${P.n}` : parts ? " · splitting into parts" : up && P ? ` · ${P.n} parts` : "";
       const err = !up && m.lastError ? ` · ${esc(m.lastError)}` : "";
       return `<div class="item" data-id="${m.id}"><div class="top"><div class="name">${esc(m.name)}</div>${badge}</div>
-        <div class="meta">${when(m.startedAt)} · ${fmtDur(m.duration)} · ${fmtSize(m.size)}${m.recovered ? " · recovered" : ""}${err}</div>
+        <div class="meta">${when(m.startedAt)} · ${fmtDur(m.duration)} · ${fmtSize(m.size)}${m.recovered ? " · recovered" : ""}${partsNote}${err}</div>
         <div class="bar" style="display:${busy ? "block" : "none"}"><i style="width:${Math.round((progress[m.id] || 0) * 100)}%"></i></div>
-        <div class="acts">${m.audioGone ? "" : `<button data-a="play">Play</button>`}<button data-a="rename">Rename</button>${up && m.driveId ? `<a href="https://drive.google.com/file/d/${m.driveId}/view" target="_blank" rel="noopener">Open in Drive</a>` : ""}<button data-a="delete">${up ? "Remove from phone" : "Delete"}</button></div></div>`;
+        <div class="acts">${m.audioGone ? "" : `<button data-a="play">Play</button>`}<button data-a="rename">Rename</button>${(up || parts) && m.driveId ? `<a href="https://drive.google.com/file/d/${m.driveId}/view" target="_blank" rel="noopener">Open in Drive</a>` : ""}<button data-a="delete">${up || parts ? "Remove from phone" : "Delete"}</button></div></div>`;
     }).join("");
   }
   function paintProgress(id) { const el = document.querySelector(`.item[data-id="${id}"] .bar i`); if (el) el.style.width = Math.round((progress[id] || 0) * 100) + "%"; }
@@ -407,17 +494,22 @@
     } else if (b.dataset.a === "rename") {
       const name = prompt("Name this recording", m.name); if (!name || name.trim() === m.name) return;
       m.name = name.trim(); await DB.putRec(m);
-      if (m.status === "uploaded" && m.driveId) { try { await api("PATCH", `https://www.googleapis.com/drive/v3/files/${m.driveId}?fields=id`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: m.name + extFor(m.mime) }) }); } catch (x) { notice("Renamed on the phone; the Drive name will update after you sign in."); } }
+      if (m.driveId) {
+        const named = [[m.driveId, m.name + extFor(m.mime)]].concat(((m.parts && m.parts.ids) || []).map((pid, i) => [pid, partName(m, i, m.parts.n)]));
+        try { for (const [fid, nm] of named) if (fid) await api("PATCH", `https://www.googleapis.com/drive/v3/files/${fid}?fields=id`, { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: nm }) }); }
+        catch (x) { notice("Renamed on the phone; the Drive name didn't update (sign in and rename again)."); }
+      }
       render();
     } else if (b.dataset.a === "delete") {
-      if (m.status !== "uploaded" && !confirm("This recording hasn't reached Google Drive yet. Delete it for good?")) return;
+      if (m.status === "parts" && !confirm("The full recording is in Drive, but its pieces for processing haven't all uploaded. Remove it from the phone anyway?")) return;
+      if (m.status === "saved" && !confirm("This recording hasn't reached Google Drive yet. Delete it for good?")) return;
       if (m.status === "uploaded") { await DB.dropAudio(m.id); await DB.remove(m.id); } else await DB.remove(m.id);
       render();
     }
   });
   $("rec").addEventListener("click", () => (cur ? stopRecording("stopped") : startRecording()));
   $("syncBtn").addEventListener("click", () => { if (Queue.needAuth) Auth.signIn(false); else { recsClearRetry().then(() => Queue.kick()); } });
-  async function recsClearRetry() { for (const m of await DB.allRecs()) if (m.status === "saved" && m.retryAt) { m.retryAt = 0; await DB.putRec(m); } }
+  async function recsClearRetry() { for (const m of await DB.allRecs()) if ((m.status === "saved" || m.status === "parts") && m.retryAt) { m.retryAt = 0; await DB.putRec(m); } }
   $("acct").addEventListener("click", () => openSettings());
   $("gear").addEventListener("click", () => openSettings());
   $("sheetBg").addEventListener("click", closeSheet);
