@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Studio · Voice capture</title>
+<meta name="theme-color" content="#F4F1EA">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link id="gf" rel="stylesheet" href="">
+<style>
+  :root {
+    --paper:#F4F1EA; --card:#FBFAF6; --ink:#1C1B19; --ink2:#5E5A53; --ink3:#9A958C; --line:#E3DED3; --sel:#1C1B19;
+    --r:14px; --ease:cubic-bezier(.2,0,0,1);
+  }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; background:var(--paper); color:var(--ink); }
+  body { font:15px/1.45 "Inter", -apple-system, system-ui, sans-serif; }
+  header, nav, section, .footer, .sheet, .toast { font-feature-settings:"ss01","cv11"; }
+  .wrap { max-width:760px; margin:0 auto; }
+  header { display:flex; align-items:center; gap:10px; padding:14px 16px 10px; }
+  header h1 { font:600 15px/1.2 "Inter",sans-serif; letter-spacing:-.005em; margin:0; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .icon-btn { width:40px; height:40px; border-radius:20px; border:0; background:transparent; color:var(--ink); font-size:18px; display:grid; place-items:center; cursor:pointer; }
+  .icon-btn:disabled { color:var(--ink3); }
+  .top { position:sticky; top:0; z-index:5; background:var(--paper); padding:0 16px 8px; }
+  .stage { position:relative; border-radius:10px; overflow:hidden; background:#ddd; box-shadow:0 1px 0 rgba(0,0,0,.04), 0 12px 30px -18px rgba(28,27,25,.35); margin:0 auto; touch-action:manipulation; }
+  canvas { display:block; width:100%; height:100%; font-feature-settings:normal; font-variant:normal; letter-spacing:normal; }
+  .hint { position:absolute; left:50%; bottom:10px; transform:translateX(-50%); font:500 12px "Inter"; color:#fff; background:rgba(20,19,18,.55); padding:6px 10px; border-radius:20px; pointer-events:none; transition:opacity .3s var(--ease); white-space:nowrap; }
+  .compare-tag { position:absolute; top:10px; left:10px; font:600 11px "Inter"; letter-spacing:.06em; text-transform:uppercase; color:#fff; background:rgba(20,19,18,.6); padding:4px 8px; border-radius:6px; display:none; }
+  .transport { display:flex; align-items:center; gap:12px; padding:12px 0 0; }
+  .grab { display:block; width:88px; height:22px; margin:0 auto; border:0; background:transparent; cursor:ns-resize; touch-action:none; position:relative; }
+  .grab::before { content:""; position:absolute; left:50%; top:50%; width:36px; height:5px; margin:-2.5px 0 0 -18px; border-radius:3px; background:#CFC9BC; transition:background .2s var(--ease); }
+  .grab:active::before, .grab.on::before { background:var(--ink2); }
+  .play { width:48px; height:48px; border-radius:24px; border:0; background:var(--ink); color:var(--paper); font-size:17px; display:grid; place-items:center; cursor:pointer; flex:none; }
+  .scrub { flex:1; position:relative; height:44px; display:flex; align-items:center; }
+  .scrub input { width:100%; margin:0; appearance:none; -webkit-appearance:none; background:transparent; height:44px; }
+  .scrub input::-webkit-slider-runnable-track { height:4px; border-radius:2px; background:linear-gradient(to right, var(--ink) var(--p,0%), var(--line) var(--p,0%)); }
+  .scrub input::-webkit-slider-thumb { -webkit-appearance:none; width:16px; height:16px; border-radius:8px; background:var(--ink); margin-top:-6px; }
+  .time { font:500 12px "Inter"; font-variant-numeric:tabular-nums; color:var(--ink2); min-width:76px; text-align:right; }
+  nav.tabs { display:flex; gap:4px; padding:6px 16px 0; border-bottom:1px solid var(--line); position:sticky; z-index:4; background:var(--paper); }
+  nav.tabs button { flex:1; height:44px; border:0; background:transparent; font:500 14px "Inter"; color:var(--ink3); border-bottom:2px solid transparent; cursor:pointer; }
+  nav.tabs button.on { color:var(--ink); border-bottom-color:var(--ink); }
+  section.panel { display:none; padding:18px 16px 140px; }
+  section.panel.on { display:block; }
+  h2 { font:600 11px/1 "Inter"; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); margin:22px 0 10px; }
+  h2:first-child { margin-top:4px; }
+  .presets { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+  @media (min-width:640px) { .presets { grid-template-columns:repeat(3,1fr); } }
+  .preset { text-align:left; border:1px solid var(--line); background:var(--card); border-radius:var(--r); padding:0; overflow:hidden; cursor:pointer; color:var(--ink); }
+  .preset .sw { height:58px; display:flex; align-items:center; padding:0 12px; font-size:22px; }
+  .preset .meta { padding:9px 12px 11px; }
+  .preset b { font:600 14px "Inter"; display:block; }
+  .preset span { font:400 12px/1.35 "Inter"; color:var(--ink2); }
+  .preset.on { border-color:var(--sel); box-shadow:0 0 0 1px var(--sel); }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  .chip { min-height:40px; padding:0 14px; border-radius:20px; border:1px solid var(--line); background:var(--card); font:500 13px "Inter"; color:var(--ink); cursor:pointer; }
+  .chip.on { background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .seg { display:flex; background:#ECE8DF; border-radius:12px; padding:3px; }
+  .seg button { flex:1; min-height:38px; border:0; border-radius:9px; background:transparent; font:500 13px "Inter"; color:var(--ink2); cursor:pointer; }
+  .seg button.on { background:var(--card); color:var(--ink); box-shadow:0 1px 2px rgba(0,0,0,.08); }
+  .swatches { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; }
+  .swatch { border:1px solid var(--line); border-radius:12px; height:64px; cursor:pointer; position:relative; display:flex; align-items:flex-end; padding:7px 9px; font:600 11px "Inter"; }
+  .swatch.on { box-shadow:0 0 0 2px var(--paper), 0 0 0 3.5px var(--ink); }
+  .swatch i { position:absolute; top:9px; right:9px; width:10px; height:10px; border-radius:5px; }
+  .fonts { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .font { text-align:left; border:1px solid var(--line); background:var(--card); border-radius:12px; padding:10px 12px; cursor:pointer; color:var(--ink); }
+  .font .s { font-size:24px; line-height:1.1; display:block; }
+  .font .l { font:400 11.5px "Inter"; color:var(--ink2); }
+  .font.on { border-color:var(--ink); box-shadow:0 0 0 1px var(--ink); }
+  .slider { padding:8px 0 10px; border-bottom:1px solid var(--line); }
+  .slider:last-child { border-bottom:0; }
+  .slider .top2 { display:flex; justify-content:space-between; align-items:baseline; }
+  .slider label { font:500 14px "Inter"; }
+  .slider .val { font:500 12px "Inter"; color:var(--ink3); font-variant-numeric:tabular-nums; }
+  .slider .help { font:400 12px "Inter"; color:var(--ink2); margin:1px 0 2px; }
+  .slider input { width:100%; margin:6px 0 0; appearance:none; -webkit-appearance:none; background:transparent; height:32px; }
+  .slider input::-webkit-slider-runnable-track { height:3px; border-radius:2px; background:var(--line); }
+  .slider input::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; border-radius:11px; background:var(--card); border:1px solid #CFC9BC; box-shadow:0 1px 3px rgba(0,0,0,.15); margin-top:-10px; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 14px; font:500 12.5px "Inter"; color:var(--ink2); }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:5px; margin-right:6px; vertical-align:-1px; }
+  .words { font:400 16px/2 "Inter"; }
+  .words span { padding:2px 3px; border-radius:6px; cursor:pointer; }
+  .words span.fn { color:var(--ink3); }
+  .words span.low { text-decoration:underline dotted #B9855B; text-underline-offset:4px; }
+  .words span.cur { background:#E9E2D2; }
+  .words span.ed-emph { font-weight:700; }
+  .words span.ed-quiet { color:var(--ink3); font-style:italic; }
+  .words span.fl { color:var(--ink3); font-style:italic; }
+  .words span.fl.off { text-decoration:line-through; text-decoration-color:#C9C2B4; }
+  .sheet { position:fixed; left:0; right:0; bottom:0; z-index:20; background:var(--card); border-radius:18px 18px 0 0; box-shadow:0 -12px 40px rgba(28,27,25,.18); padding:10px 16px calc(18px + env(safe-area-inset-bottom)); transform:translateY(105%); transition:transform .28s var(--ease); max-width:760px; margin:0 auto; }
+  .sheet.on { transform:none; }
+  .sheet .grab { width:36px; height:5px; border-radius:3px; background:#D8D2C6; margin:0 auto 12px; }
+  .sheet .w { font:600 20px "Inter"; margin-bottom:12px; }
+  .footer { position:fixed; left:0; right:0; bottom:0; z-index:10; background:linear-gradient(to top, var(--paper) 70%, rgba(244,241,234,0)); padding:18px 16px calc(14px + env(safe-area-inset-bottom)); }
+  .footer .in { max-width:728px; margin:0 auto; display:flex; gap:10px; }
+  .btn { height:50px; border-radius:25px; border:1px solid var(--line); background:var(--card); font:600 15px "Inter"; color:var(--ink); padding:0 18px; cursor:pointer; }
+  .btn.primary { flex:1; background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .toast { position:fixed; left:50%; bottom:92px; transform:translate(-50%,20px); opacity:0; transition:all .28s var(--ease); background:var(--ink); color:var(--paper); font:500 13px/1.35 "Inter"; padding:10px 14px; border-radius:12px; z-index:30; max-width:88vw; text-align:center; }
+  .toast.on { opacity:1; transform:translate(-50%,0); }
+  .looks { display:flex; flex-direction:column; gap:8px; }
+  .look { display:flex; align-items:center; gap:10px; border:1px solid var(--line); background:var(--card); border-radius:12px; padding:8px 10px; }
+  .look .sw2 { width:34px; height:34px; border-radius:8px; flex:none; display:grid; place-items:center; font-size:15px; }
+  .look b { font:600 14px "Inter"; flex:1; }
+  .look button { min-height:36px; }
+  input.name { width:100%; height:44px; border-radius:12px; border:1px solid var(--line); background:var(--card); font:500 15px "Inter"; padding:0 12px; color:var(--ink); }
+  .muted { color:var(--ink2); font-size:13px; }
+  a.icon-btn { text-decoration:none; font-size:26px; line-height:1; }
+  .status { font:500 12px "Inter"; color:var(--ink3); white-space:nowrap; }
+  .words span.fx { background:#E1EAF3; }
+  .words span.fx.gone { text-decoration:line-through; color:var(--ink3); }
+  .fixrow { display:flex; gap:8px; align-items:center; }
+  .fixrow input { flex:1; }
+  .blocker { padding:40px 22px; font:400 15px/1.5 "Inter"; color:var(--ink2); text-align:center; }
+  .blocker a { color:var(--ink); font-weight:600; }
+  textarea.recipe { width:100%; min-height:70px; border-radius:12px; border:1px solid var(--line); background:var(--card); font:12px ui-monospace,Menlo,monospace; padding:10px; color:var(--ink2); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <a class="icon-btn" href="./#library" aria-label="Back to Library">‹</a>
+    <h1 id="title">Studio</h1>
+    <span class="status" id="saveState"></span>
+    <button class="icon-btn" id="undo" aria-label="Undo" disabled>↶</button>
+    <button class="icon-btn" id="redo" aria-label="Redo" disabled>↷</button>
+  </header>
+  <div class="top">
+    <div class="stage" id="stage"><canvas id="cv"></canvas><div class="compare-tag" id="ctag">Plain</div><div class="hint" id="hint">Press play — your voice sets the type</div></div>
+    <div class="transport">
+      <button class="play" id="play" aria-label="Play">▶</button>
+      <div class="scrub"><input id="seek" type="range" min="0" max="1000" value="0" aria-label="Position"></div>
+      <span class="time" id="time">0:00 / 0:00</span>
+    </div>
+    <button class="grab" id="grab" aria-label="Video size: drag up to shrink, down to enlarge, or tap to cycle"></button>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-t="look" class="on">Look</button><button data-t="voice">Voice</button><button data-t="motion">Motion</button><button data-t="words">Words</button>
+  </nav>
+  <section class="panel on" id="p-look">
+    <h2>Looks</h2><div class="presets" id="presets"></div>
+    <div id="savedWrap" style="display:none"><h2>Saved looks</h2><div class="looks" id="saved"></div></div>
+    <h2>Color</h2><div class="swatches" id="palettes"></div>
+    <h2>Typeface</h2><div class="fonts" id="fonts"></div>
+    <h2>Placement</h2><div class="seg" id="placement"></div>
+    <h2>Format</h2><div class="seg" id="aspect"></div>
+    <h2>Size</h2><div id="look-sliders"></div>
+  </section>
+  <section class="panel" id="p-voice">
+    <h2>How your voice shapes the words</h2><div id="voice-sliders"></div>
+    <h2>Meaning</h2><div id="meaning-sliders"></div>
+    <h2>Themes in this recording</h2><div class="legend" id="legend"></div>
+  </section>
+  <section class="panel" id="p-motion">
+    <h2>Types out by</h2><div class="seg" id="unit"></div>
+    <h2>Entrance</h2><div class="row" id="entrance"></div>
+    <h2>Once typed</h2><div class="seg" id="after"></div>
+    <div id="motion-sliders" style="margin-top:12px"></div>
+  </section>
+  <section class="panel" id="p-words">
+    <h2 style="margin-top:4px">Filler words <span id="flCount" style="text-transform:none;letter-spacing:0;font-weight:500"></span></h2><div class="seg" id="fillers"></div>
+    <p class="muted" id="flHelp" style="margin:8px 0 18px"></p>
+    <p class="muted" style="margin-top:0">Tap a word to correct it or change its emphasis. Dotted words may be misheard. Corrections show right away; Claude re-times them and learns new names the next time it processes your voice notes.</p>
+    <p class="muted" id="fixCount" style="margin-top:0"></p>
+    <div class="words" id="words"></div>
+  </section>
+</div>
+<div class="footer"><div class="in">
+  <button class="btn" id="saveBtn">Save look</button>
+  <button class="btn primary" id="renderBtn">Render video</button>
+</div></div>
+<div class="sheet" id="sheet"><div class="grab"></div><div id="sheetBody"></div></div>
+<div class="toast" id="toast"></div>
+<audio id="au" preload="auto" playsinline></audio>
+<div class="blocker" id="blocker" style="display:none"></div>
+<script src="config.js"></script>
+<script src="shared.js"></script>
+<script src="engine.js"></script>
+<script>
+const INITIAL = {};
+const D = window.VCDrive, AID = new URLSearchParams(location.search).get("id") || "";
+const $ = (id) => document.getElementById(id);
+const au = $("au"), cv = $("cv"), ctx = cv.getContext("2d"), mctx = document.createElement("canvas").getContext("2d");
+const measure = (t, fam, w, em) => { if (!t) return 0; mctx.font = `${w} ${em}px "${fam}"`; return mctx.measureText(t).width; };
+const fmt = (s) => { s = Math.max(0, s | 0); return `${(s / 60) | 0}:${String(s % 60).padStart(2, "0")}`; };
+$("gf").href = "https://fonts.googleapis.com/css2?" + Object.values(VC.FONTS).map((f) => "family=" + f.gf).join("&") + "&family=Inter:wght@400;500;600;700&display=swap";
+
+let P = VC.params(INITIAL), data = null, scene = null, plainScene = null, compare = false, boxes = [], dirty = true;
+let hist = [], fut = [], looks = [];
+// Drive state: base = caption data from Claude; fixes = word corrections (index -> text, "" removes); data = base with fixes applied
+let base = null, CAP = null, rev = 1, fixes = {}, renderReq = null, studioId = null, editsId = null, looksId = null, ready = false;
+const PRESET_NOTES = { Typewriter: "Typed out as you speak; loud sounds land heavy.", Manuscript: "A page that fills like a notebook.",
+  Poster: "Big, bold, left-set — for statements.", Score: "Letters ride the melody of the voice.", Ticker: "One line at a time, low on screen.", Plain: "Quiet and maximally readable." };
+
+// ---------- state & history
+function setP(patch, record = true) {
+  if (record) { hist.push(JSON.stringify(P)); if (hist.length > 80) hist.shift(); fut = []; }
+  P = Object.assign({}, P, patch); syncUI(); rebuild();
+}
+function applyPreset(name) { setP(Object.assign(VC.params({ preset: name }), { edits: P.edits, thEdits: P.thEdits })); }
+function diff() {
+  const base = VC.params({ preset: P.preset }), out = { preset: P.preset };
+  for (const k of Object.keys(VC.DEFAULTS)) {
+    if (k === "edits" || k === "thEdits") continue;
+    if (JSON.stringify(P[k]) !== JSON.stringify(base[k])) out[k] = P[k];
+  }
+  return out;
+}
+function recipe() {
+  const d = diff();
+  if (Object.keys(P.edits || {}).length) d.edits = P.edits;
+  if (Object.keys(P.thEdits || {}).length) d.thEdits = P.thEdits;
+  return d;
+}
+$("undo").onclick = () => { if (!hist.length) return; fut.push(JSON.stringify(P)); P = JSON.parse(hist.pop()); syncUI(); rebuild(); };
+$("redo").onclick = () => { if (!fut.length) return; hist.push(JSON.stringify(P)); P = JSON.parse(fut.pop()); syncUI(); rebuild(); };
+
+// ---------- controls
+const SL = {
+  "look-sliders": [["size", "Text size", "", 40, 180, 1], ["weight", "Base weight", "Thin to heavy before the voice acts on it", 100, 900, 10],
+    ["width", "Line width", "", 0.4, 0.95, 0.01], ["maxLines", "Lines on screen", "", 1, 9, 1], ["lineHeight", "Line spacing", "", 1, 2.2, 0.02], ["position", "Height on screen", "Phrase placement only", 0.2, 0.8, 0.01]],
+  "voice-sliders": [["weightAmt", "Weight follows loudness", "Louder sounds land heavier", 0, 1.5, 0.05], ["sizeAmt", "Size follows loudness", "Louder sounds grow", 0, 1.2, 0.05],
+    ["lift", "Rise with pitch", "Higher notes lift the letters", 0, 2, 0.05], ["tilt", "Lean with inflection", "Rising tones tilt words up", 0, 1.5, 0.05],
+    ["stretch", "Open long sounds", "Drawn-out words breathe wider", 0, 2, 0.05], ["attack", "Consonant snap", "Hard consonants pop as they land", 0, 1.5, 0.05],
+    ["emphasis", "Emphasis", "How readily stressed words turn bold", 0, 1, 0.05], ["trace", "Melody line", "A thin line drawing each phrase's tune", 0, 1, 0.05]],
+  "meaning-sliders": [["semantic", "Color by theme", "Key ideas take their theme's color", 0, 1, 0.05], ["recede", "Quiet the little words", "Articles and connectors fade to neutral", 0, 1, 0.05]],
+  "motion-sliders": [["enterMs", "Entrance time", "For fade, rise, scale and blur", 0, 1200, 10], ["ghost", "Show upcoming text", "0 = appears only when spoken", 0, 0.6, 0.01],
+    ["pauseBreak", "Pause that starts a new phrase", "Seconds of silence", 0.2, 2.5, 0.05], ["hold", "Linger after a phrase", "Seconds", 0, 3, 0.1]],
+};
+function slider(host, [key, label, help, a, b, step]) {
+  const d = document.createElement("div"); d.className = "slider";
+  d.innerHTML = `<div class="top2"><label for="s-${key}">${label}</label><span class="val" id="v-${key}"></span></div>${help ? `<div class="help">${help}</div>` : ""}<input id="s-${key}" type="range" min="${a}" max="${b}" step="${step}">`;
+  host.appendChild(d);
+  const inp = d.querySelector("input"); let started = false;
+  inp.addEventListener("pointerdown", () => { started = false; });
+  inp.addEventListener("input", () => { setP({ [key]: +inp.value }, !started); started = true; });
+}
+function seg(host, key, opts) {
+  opts.forEach(([v, label]) => { const b = document.createElement("button"); b.textContent = label; b.dataset.v = v; b.onclick = () => setP({ [key]: v }); host.appendChild(b); });
+}
+function build() {
+  for (const [host, list] of Object.entries(SL)) list.forEach((s) => slider($(host), s));
+  Object.keys(VC.PRESETS).forEach((name) => {
+    const pp = VC.params({ preset: name }), pal = VC.PALETTES[pp.palette];
+    const b = document.createElement("button"); b.className = "preset"; b.dataset.p = name;
+    b.innerHTML = `<div class="sw" style="background:${pal.bg};color:${pal.ink};font-family:'${pp.font}';font-weight:${Math.min(700, pp.weight + 150)}">Aa <span style="color:${VC.themeColors(pal, 1)[0]};margin-left:6px">voice</span></div><div class="meta"><b>${name}</b><span>${PRESET_NOTES[name] || ""}</span></div>`;
+    b.onclick = () => applyPreset(name); $("presets").appendChild(b);
+  });
+  Object.entries(VC.PALETTES).forEach(([name, pal]) => {
+    const b = document.createElement("button"); b.className = "swatch"; b.dataset.v = name; b.style.background = pal.bg; b.style.color = pal.ink;
+    b.innerHTML = `${name}<i style="background:${VC.themeColors(pal, 1)[0]}"></i>`; b.onclick = () => setP({ palette: name }); $("palettes").appendChild(b);
+  });
+  Object.entries(VC.FONTS).forEach(([name, f]) => {
+    const b = document.createElement("button"); b.className = "font"; b.dataset.v = name;
+    b.innerHTML = `<span class="s" style="font-family:'${name}'">${name}</span><span class="l">${f.label}</span>`; b.onclick = () => setP({ font: name }); $("fonts").appendChild(b);
+  });
+  seg($("placement"), "placement", [["block", "Phrase"], ["page", "Page"], ["ticker", "Line"], ["editorial", "Poster"]]);
+  seg($("aspect"), "aspect", [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"], ["4:5", "4:5"]]);
+  seg($("unit"), "unit", [["letter", "Letter"], ["syllable", "Syllable"], ["word", "Word"]]);
+  seg($("after"), "after", [["live", "Live"], ["settle", "Settle"], ["breathe", "Breathe"]]);
+  seg($("fillers"), "fillers", [["hide", "Hidden"], ["show", "Shown"]]);
+  [["instant", "Instant"], ["fade", "Fade"], ["rise", "Rise"], ["scale", "Grow"], ["blur", "Focus"]].forEach(([v, l]) => {
+    const b = document.createElement("button"); b.className = "chip"; b.textContent = l; b.dataset.v = v; b.onclick = () => setP({ entrance: v }); $("entrance").appendChild(b);
+  });
+  document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => {
+    document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    document.querySelectorAll("section.panel").forEach((s) => s.classList.toggle("on", s.id === "p-" + b.dataset.t));
+    if (b.dataset.t === "words") markWord(true);
+  }));
+}
+function syncUI() {
+  for (const list of Object.values(SL)) for (const [key, , , , , step] of list) {
+    const el = $("s-" + key); if (!el) continue; el.value = P[key];
+    $("v-" + key).textContent = step >= 1 ? String(Math.round(P[key])) : (+P[key]).toFixed(2);
+  }
+  const on = (host, v) => document.querySelectorAll(`#${host} [data-v]`).forEach((b) => b.classList.toggle("on", b.dataset.v === String(v)));
+  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers);
+  $("flHelp").textContent = P.fillers === "show" ? "Shown in the quiet color, timed to the moment they are spoken." : "Left out of the captions; the words close up and the typing pauses while they are spoken.";
+  if (data && P.fillers !== shownFillers) renderWords();
+  const edited = Object.keys(diff()).length > 1;
+  document.querySelectorAll("#presets .preset").forEach((b) => { b.classList.toggle("on", b.dataset.p === P.preset); b.querySelector("b").textContent = b.dataset.p + (b.dataset.p === P.preset && edited ? " · edited" : ""); });
+  $("undo").disabled = !hist.length; $("redo").disabled = !fut.length;
+}
+
+// ---------- scene & drawing
+let rt = null;
+function rebuild() {
+  clearTimeout(rt);
+  rt = setTimeout(async () => {
+    try { await Promise.all([200, 400, 700, 900].map((w) => document.fonts.load(`${w} 40px "${P.font}"`))); } catch (e) {}
+    if (!data) return;
+    scene = VC.buildScene(data, P, measure); plainScene = null; resize(); legend(); dirty = true;
+    try { localStorage.setItem("vc2-params", JSON.stringify(recipe())); } catch (e) {}
+    if (ready) saveEdits();
+  }, 70);
+}
+// stage size: 0.3-1 of the full width; drag the bar under the transport, or tap it to cycle large / medium / small
+let stageScale = 1;
+try { stageScale = Math.min(1, Math.max(0.3, +localStorage.getItem("vc2-stage") || 1)); } catch (e) {}
+function stageBox(scale) {
+  const r = scene.W / scene.H, w = Math.min(document.querySelector(".top").clientWidth - 32, 728), maxH = window.innerHeight * 0.48;
+  let cw = w, ch = w / r; if (ch > maxH) { ch = maxH; cw = ch * r; }
+  return [cw * scale, ch * scale, ch];
+}
+function resize(cssOnly) {
+  if (!scene) return;
+  const [cw, ch] = stageBox(stageScale);
+  const st = $("stage"); st.style.width = cw + "px"; st.style.height = ch + "px"; $("hint").style.display = cw < 260 ? "none" : "";
+  if (!cssOnly) { const dpr = Math.min(2, window.devicePixelRatio || 1); cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr); dirty = true; }
+  $("tabs").style.top = document.querySelector(".top").offsetHeight + "px";
+}
+(() => {
+  const g = $("grab"); let y0 = 0, s0 = 1, h0 = 1, moved = false, down = false;
+  const save = () => { try { localStorage.setItem("vc2-stage", String(stageScale)); } catch (e) {} };
+  g.addEventListener("pointerdown", (e) => { if (!scene) return; down = true; moved = false; y0 = e.clientY; s0 = stageScale; h0 = stageBox(1)[2]; g.setPointerCapture(e.pointerId); g.classList.add("on"); });
+  g.addEventListener("pointermove", (e) => {
+    if (!down) return; const dy = e.clientY - y0; if (Math.abs(dy) > 4) moved = true; if (!moved) return;
+    stageScale = Math.min(1, Math.max(0.3, s0 + dy / h0)); resize(true);
+  });
+  const end = () => {
+    if (!down) return; down = false; g.classList.remove("on");
+    if (!moved) stageScale = stageScale > 0.8 ? 0.62 : stageScale > 0.45 ? 0.38 : 1;
+    resize(); save();
+  };
+  g.addEventListener("pointerup", end); g.addEventListener("pointercancel", end);
+})();
+function frame() {
+  if (scene && (!au.paused || dirty)) {
+    let sc = scene;
+    if (compare) { if (!plainScene) plainScene = VC.buildScene(data, { preset: "Plain", aspect: P.aspect }, measure); sc = plainScene; }
+    const k = cv.width / sc.W; ctx.setTransform(k, 0, 0, k, 0, 0);
+    boxes = VC.draw(ctx, sc, au.currentTime); dirty = false;
+  }
+  if (au.duration) {
+    $("time").textContent = `${fmt(au.currentTime)} / ${fmt(au.duration)}`;
+    if (!seeking) { const p = (100 * au.currentTime) / au.duration; $("seek").value = p * 10; $("seek").style.setProperty("--p", p + "%"); }
+    markWord(false);
+  }
+  requestAnimationFrame(frame);
+}
+function legend() {
+  const th = (data && data.themes) || []; $("legend").innerHTML = th.length ? th.map((n, i) => `<span><i style="background:${scene.tcol[i % scene.tcol.length]}"></i>${n}</span>`).join("") : `<span class="muted">No themes tagged yet — ask Claude to tag concepts.</span>`;
+}
+
+// ---------- transport
+let seeking = false;
+const toggle = () => { if (au.paused) au.play().catch(() => {}); else au.pause(); };
+au.addEventListener("play", () => { $("play").textContent = "❚❚"; $("hint").style.opacity = 0; });
+au.addEventListener("pause", () => { $("play").textContent = "▶"; dirty = true; });
+au.addEventListener("seeked", () => (dirty = true));
+$("play").onclick = toggle;
+$("seek").addEventListener("input", () => { seeking = true; if (au.duration) au.currentTime = (au.duration * $("seek").value) / 1000; $("seek").style.setProperty("--p", $("seek").value / 10 + "%"); dirty = true; });
+$("seek").addEventListener("change", () => (seeking = false));
+// stage: tap = play/pause or word, hold = compare with Plain
+let holdT = null, held = false;
+$("stage").addEventListener("pointerdown", (e) => { held = false; holdT = setTimeout(() => { held = true; compare = true; $("ctag").style.display = "block"; dirty = true; }, 350); });
+const endHold = (e) => {
+  clearTimeout(holdT);
+  if (held) { compare = false; $("ctag").style.display = "none"; dirty = true; return; }
+  if (e.type !== "pointerup") return;
+  const r = cv.getBoundingClientRect(), x = ((e.clientX - r.left) / r.width) * scene.W, y = ((e.clientY - r.top) / r.height) * scene.H;
+  const hit = boxes.find((b) => x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y && y <= b.y + b.h);
+  if (hit && au.paused) openWord(hit.i); else toggle();
+};
+$("stage").addEventListener("pointerup", endHold); $("stage").addEventListener("pointerleave", endHold); $("stage").addEventListener("pointercancel", endHold);
+
+// ---------- words
+let lastW = -1;
+let shownFillers = null;
+function renderWords() {
+  const host = $("words"); host.innerHTML = ""; shownFillers = P.fillers;
+  const nf = data.words.filter((w) => w.fl).length, nx = Object.keys(fixes).length;
+  $("fixCount").textContent = nx ? `${nx} correction${nx > 1 ? "s" : ""} waiting for Claude to re-time.` : "";
+  $("flCount").textContent = nf ? `· ${nf} in this recording` : "· none tagged";
+  data.words.forEach((w, i) => {
+    const s = document.createElement("span"); s.id = "w" + i; const fx = i in fixes; s.textContent = fx ? (fixes[i] || base.words[i].w.trim()) : w.w.trim();
+    const ed = P.edits[i];
+    s.className = fx ? "fx " + (fixes[i] ? "" : "gone ") : (w.fl ? "fl " + (P.fillers !== "show" ? "off " : "") : w.fn && !ed ? "fn " : "") + (w.p < 0.5 && !w.fl ? "low " : "") + (ed ? "ed-" + ed : "");
+    const th = P.thEdits[i] != null ? P.thEdits[i] : w.th; if (th != null && th >= 0 && scene) s.style.color = scene.tcol[th % scene.tcol.length];
+    s.onclick = () => openWord(i); host.appendChild(s); host.appendChild(document.createTextNode(" "));
+  });
+}
+function markWord(force) {
+  if (!data || !$("p-words").classList.contains("on")) return;
+  const t = au.currentTime; let lo = 0, hi = data.words.length - 1, wi = -1;
+  while (lo <= hi) { const m = (lo + hi) >> 1; if (data.words[m].s <= t) { wi = m; lo = m + 1; } else hi = m - 1; }
+  if (wi === lastW && !force) return;
+  const a = $("w" + lastW); if (a) a.classList.remove("cur"); const b = $("w" + wi); if (b) { b.classList.add("cur"); if (!au.paused) b.scrollIntoView({ block: "center", behavior: "smooth" }); } lastW = wi;
+}
+function openWord(i) {
+  const w = data.words[i], orig = base.words[i].w.trim(), ed = P.edits[i] || "auto", th = P.thEdits[i] != null ? P.thEdits[i] : w.th != null ? w.th : -1;
+  const themes = data.themes || [];
+  const shown = i in fixes ? fixes[i] : orig;
+  $("sheetBody").innerHTML = `<div class="w">${escH(shown || orig)}${i in fixes ? ` <span class="muted" style="font-weight:400;font-size:13px">was “${escH(orig)}”</span>` : ""}</div>
+    <h2 style="margin-top:0">Correct the word</h2>
+    <div class="fixrow"><input class="name" id="fixIn" value="${escH(shown)}" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done"><button class="chip" id="fixSave">Save</button></div>
+    <div class="row" style="margin-top:8px"><button class="chip" id="fixDel">Remove word</button>${i in fixes ? `<button class="chip" id="fixUndo">Undo correction</button>` : ""}</div>
+    <h2>Emphasis</h2><div class="seg" id="edSeg">${[["auto", "Auto"], ["emph", "Emphasize"], ["normal", "Normal"], ["quiet", "Quieter"]].map(([v, l]) => `<button data-v="${v}" class="${ed === v ? "on" : ""}">${l}</button>`).join("")}</div>
+    <h2>Theme</h2><div class="row" id="thRow"><button class="chip ${th < 0 ? "on" : ""}" data-v="-1">None</button>${themes.map((n, k) => `<button class="chip ${th === k ? "on" : ""}" data-v="${k}"><i style="display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:6px;background:${scene.tcol[k % scene.tcol.length]}"></i>${n}</button>`).join("")}</div>
+    <div class="row" style="margin-top:16px"><button class="btn" id="jump" style="flex:1">Play from here</button><button class="btn" id="closeS">Done</button></div>`;
+  $("sheet").classList.add("on");
+  document.querySelectorAll("#edSeg button").forEach((b) => (b.onclick = () => {
+    const e = Object.assign({}, P.edits); if (b.dataset.v === "auto") delete e[i]; else e[i] = b.dataset.v; setP({ edits: e }); openWord(i); renderWords();
+  }));
+  document.querySelectorAll("#thRow button").forEach((b) => (b.onclick = () => {
+    const e = Object.assign({}, P.thEdits); const v = +b.dataset.v; if (v === (w.th != null ? w.th : -1)) delete e[i]; else e[i] = v; setP({ thEdits: e }); openWord(i); renderWords();
+  }));
+  const setFix = (v) => { if (v === null || v === orig) delete fixes[i]; else fixes[i] = v; applyFixes(); rebuild(); renderWords(); saveEdits(); openWord(i); };
+  $("fixSave").onclick = () => setFix($("fixIn").value.replace(/\s+/g, " ").trim());
+  $("fixIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fixSave").click(); } });
+  $("fixDel").onclick = () => setFix("");
+  if ($("fixUndo")) $("fixUndo").onclick = () => setFix(null);
+  $("jump").onclick = () => { au.currentTime = Math.max(0, w.s - 1.5); $("sheet").classList.remove("on"); au.play().catch(() => {}); };
+  $("closeS").onclick = () => $("sheet").classList.remove("on");
+}
+
+// ---------- looks, render requests (shared storage when available, this device otherwise)
+function toast(msg, ms = 2600) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), ms); }
+function drawLooks() {
+  $("savedWrap").style.display = looks.length ? "block" : "none";
+  $("saved").innerHTML = "";
+  looks.forEach((L) => {
+    const pp = VC.params(L.params), pal = VC.PALETTES[pp.palette] || VC.PALETTES.Blush;
+    const d = document.createElement("div"); d.className = "look";
+    d.innerHTML = `<div class="sw2" style="background:${pal.bg};color:${pal.ink};font-family:'${pp.font}'">Aa</div><b></b><button class="chip">Use</button><button class="chip" aria-label="Delete">✕</button>`;
+    d.querySelector("b").textContent = L.name;
+    const [use, del] = d.querySelectorAll("button");
+    use.onclick = () => { setP(Object.assign(VC.params(L.params), { edits: P.edits, thEdits: P.thEdits })); toast(`Using “${L.name}”`); };
+    del.onclick = async () => { looks = looks.filter((x) => x.id !== L.id); drawLooks(); persistLooks(L.id); };
+    $("saved").appendChild(d);
+  });
+}
+async function persistLooks() {
+  try { localStorage.setItem("vc2-looks", JSON.stringify(looks)); } catch (e) {}
+  if (!studioId) return;
+  try { const r = await D.saveJson(studioId, "looks.json", { v: 1, looks }, looksId, JSON.stringify({ n: looks.length })); looksId = r.id; } catch (e) { toast("Couldn't save looks to Drive: " + e.message); }
+}
+// ---------- saving to Drive: Studio/<audio id>.edits.json (look, word corrections, render request)
+let svT = null, saving = false, again = false;
+function state(t) { $("saveState").textContent = t; }
+function saveEdits(now) {
+  if (!ready) return Promise.resolve();
+  clearTimeout(svT); state("Saving…");
+  return new Promise((res) => { svT = setTimeout(async () => { await flush(); res(); }, now ? 0 : 1200); });
+}
+async function flush() {
+  if (saving) { again = true; return; }
+  saving = true;
+  const doc = { v: 1, audioId: AID, base: rev, updatedAt: Date.now(), params: recipe(), fixes, render: renderReq };
+  const summary = { base: rev, fixes: Object.keys(fixes).length, renderAt: renderReq ? renderReq.at : 0, updatedAt: doc.updatedAt };
+  try { const r = await D.saveJson(studioId, AID + ".edits.json", doc, editsId, JSON.stringify(summary)); editsId = r.id; state("Saved"); }
+  catch (e) { state("Not saved"); toast(e instanceof D.AuthError ? "Google sign-in expired. Open the Library to sign in again; changes stay on this screen." : "Couldn't save to Drive: " + e.message, 5200); }
+  saving = false;
+  if (again) { again = false; flush(); }
+}
+$("renderBtn").onclick = async () => {
+  if (!ready) return;
+  renderReq = { at: Date.now(), params: recipe() };
+  await saveEdits(true);
+  const summary = `${P.preset}${Object.keys(diff()).length > 1 ? " · edited" : ""} · ${P.palette} · ${P.font} · ${P.aspect}`;
+  renderLabel();
+  toast(`Render requested (${summary}). Say “process my voice notes” in Claude; the video goes to Drive and shows in the Library.`, 6000);
+};
+function renderLabel() {
+  const done = CAP && CAP.video && CAP.video.at, asked = renderReq && renderReq.at > (done || 0);
+  $("renderBtn").textContent = asked ? "Render requested ✓" : done ? "Render again" : "Render video";
+}
+function applyFixes() {
+  data = Object.assign({}, base, { words: base.words.map((w, i) => {
+    if (!(i in fixes)) return w;
+    const t = fixes[i], c = Object.assign({}, w, { w: t ? " " + t : "", wh: t ? " " + t : "", fl: false, fixed: true, p: 1 });
+    ["lo", "lc", "la", "lp", "sy"].forEach((k) => delete c[k]);
+    return c;
+  }) });
+}
+function escH(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+function block(html) { $("blocker").innerHTML = html; $("blocker").style.display = "block"; document.querySelector(".wrap").style.display = "none"; document.querySelector(".footer").style.display = "none"; }
+// Claude bumps "rev" each time it rewrites the captions (after applying corrections); word-index edits made before are carried over by its remap
+function remapKeys(obj, map) { const o = {}; for (const [k, v] of Object.entries(obj || {})) { const n = map[k]; if (n != null && n >= 0) o[n] = v; } return o; }
+async function boot() {
+  if (!AID) return block(`No recording chosen. <a href="./#library">Open the Library</a>.`);
+  if (!D.token() || !D.canRead()) return block(`Google sign-in needed. <a href="./#library">Open the Library</a> to connect, then come back.`);
+  try {
+    state("Loading…");
+    const inbox = await D.inbox(), cap = await D.findFolder("Captions", inbox);
+    const f = cap ? await D.list(`'${cap}' in parents and name = '${D.quote(AID + ".captions.json")}' and trashed = false`, "id,name,modifiedTime,description") : [];
+    if (!f.length) return block(`Claude hasn't processed this recording yet. Say “process my voice notes” in Claude, then refresh the Library.`);
+    CAP = await D.getJson(f[0].id); base = CAP.data; rev = CAP.rev || 1;
+    document.title = (CAP.title || "Studio") + " · Studio"; $("title").textContent = CAP.title || "Studio";
+    // audio: Claude's small listening copy when there is one, else the original recording
+    D.getBlob(CAP.listen || AID, "audio/mp4").then((b) => { au.src = URL.createObjectURL(b); }).catch((e) => toast("Couldn't load the audio: " + e.message, 5200));
+    studioId = await D.ensureSub(inbox, "Studio", "The caption studio's saved looks, word corrections and render requests. Claude reads these.");
+    const [ef, lf] = await Promise.all([
+      D.list(`'${studioId}' in parents and name = '${D.quote(AID + ".edits.json")}' and trashed = false`, "id,modifiedTime"),
+      D.list(`'${studioId}' in parents and name = 'looks.json' and trashed = false`, "id,modifiedTime")]);
+    if (lf.length) { looksId = lf[0].id; try { const L = await D.getJson(looksId); if (L && L.looks) { looks = L.looks; drawLooks(); } } catch (e) {} }
+    let p = null;
+    if (ef.length) {
+      editsId = ef[0].id; const E = await D.getJson(editsId); p = E.params || null; renderReq = E.render || null;
+      if ((E.base || 1) >= rev) fixes = E.fixes || {};
+      else if (p && CAP.remap && CAP.remap.from === (E.base || 1)) { p.edits = remapKeys(p.edits, CAP.remap.map); p.thEdits = remapKeys(p.thEdits, CAP.remap.map); }
+    }
+    if (!p) { try { p = JSON.parse(localStorage.getItem("vc2-params") || "null"); } catch (e) {} }
+    if (p) { P = VC.params(p); hist = []; fut = []; syncUI(); }
+    applyFixes(); renderLabel(); rebuild(); setTimeout(renderWords, 200);
+    ready = true; state(ef.length ? "Saved" : "");
+  } catch (e) {
+    if (e instanceof D.AuthError) return block(`Google sign-in expired. <a href="./#library">Open the Library</a> to sign in again.`);
+    block(`Couldn't open this recording: ${escH(e.message || String(e))}. <a href="./#library">Back to the Library</a>.`);
+  }
+}
+
+// ---------- boot
+window.addEventListener("resize", () => { resize(); dirty = true; });
+build(); syncUI();
+try { looks = JSON.parse(localStorage.getItem("vc2-looks") || "[]"); drawLooks(); } catch (e) {}
+document.fonts && document.fonts.addEventListener && document.fonts.addEventListener("loadingdone", () => rebuild());
+requestAnimationFrame(frame);
+setTimeout(() => ($("hint").style.opacity = 0), 6000);
+boot();
+window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, openWord, flush };
+</script>
+</body>
+</html>

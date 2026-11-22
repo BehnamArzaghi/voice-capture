@@ -23,5 +23,18 @@ Claude's Google Drive connector downloads at most 10 MB per file (about 10 minut
 - The original is part 1 followed by every later part without its header, byte for byte. Each part's description and `appProperties` carry the header length and the SHA-256 of the original.
 - `tools/join_parts.py OUT.m4a PART… --sha256 HEX` rebuilds and verifies the original; parts can be given in any order.
 
+## Library and caption studio
+The Library tab lists the recordings in Drive. After Claude processes them ("process my voice notes" in Claude), each one has captions you can tune in the studio (`studio.html`): look, voice mapping, motion, word corrections and a render request. Everything is saved to Drive:
+
+- `Captions/<audio id>.captions.json`: written by Claude (words, timings, voice analysis). The file description holds a short JSON summary (rev, title, Notion link, video id) for the Library.
+- `Captions/<audio id>.mp4` and `.srt`: rendered videos, made when the studio asks for one.
+- `Studio/<audio id>.edits.json`: written by the app (look, corrections, render request). Claude re-times corrected words, raises `rev`, and includes an index remap so emphasis edits carry over.
+- `Captions/vocabulary.txt`: names and terms given to the transcriber; corrected words are added.
+
+The Library needs read access to Drive files the app didn't create (`drive.readonly`), because the captions are written by Claude. Keep this the only GitHub Pages site on the account: every Pages site under the same `*.github.io` address shares the browser storage that holds the sign-in token.
+
+## Processing tools
+`tools/notes.py` runs the local steps of processing (transcription with forced alignment, captions, listening copy for Notion, applying corrections, rendering); `tools/vc.py` is the caption engine's Python side and shares `engine.js` with the studio.
+
 ## Limits
 Web apps on iPhone can't record with the screen locked, so the app keeps the screen awake while recording. Uploads happen while the app is open.

@@ -2,7 +2,8 @@
 "use strict";
 (() => {
   const CFG = Object.assign({ clientId: "", folderName: "Voice Notes Inbox" }, window.VC_CONFIG || {});
-  const SCOPE = "https://www.googleapis.com/auth/drive.file";
+  // drive.file: write recordings and the studio's own files; drive.readonly: read the captions Claude writes into Drive
+  const SCOPE = "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly";
   const APP_URL = location.origin + location.pathname.replace(/index\.html$/, "");
   const CHUNK_MS = 4000;                 // each 4 s of audio is written to the phone as it is recorded
   const UPLOAD_CHUNK = CFG.uploadChunk || 5 * 1024 * 1024;  // resumable upload piece (multiple of 256 KiB)
@@ -209,7 +210,9 @@
       if (cur) return; // never leave the page while recording
       const state = Math.random().toString(36).slice(2) + Date.now().toString(36);
       S.set("oauth", { state, silent: !!silent, at: Date.now() });
-      const p = new URLSearchParams({ client_id: cid, redirect_uri: APP_URL, response_type: "token", scope: SCOPE, include_granted_scopes: "true", state });
+      // quiet renewals ask only for what was already granted, so a declined extra permission never blocks uploads
+      const scope = silent ? (S.get("scopes", "") || "https://www.googleapis.com/auth/drive.file") : SCOPE;
+      const p = new URLSearchParams({ client_id: cid, redirect_uri: APP_URL, response_type: "token", scope, include_granted_scopes: "true", state });
       if (silent) p.set("prompt", "none");
       const em = S.get("email", ""); if (em) p.set("login_hint", em);
       location.assign("https://accounts.google.com/o/oauth2/v2/auth?" + p.toString());
@@ -224,12 +227,13 @@
       if (h.get("error")) return { error: h.get("error"), silent: saved.silent };
       if (!(h.get("scope") || SCOPE).includes("drive.file")) return { error: "scope_denied" };
       S.set("token", { value: h.get("access_token"), exp: Date.now() + (+h.get("expires_in") || 3600) * 1000 });
+      S.set("scopes", h.get("scope") || SCOPE);
       return { ok: true };
     },
     signOut() {
       const t = S.get("token", null);
       if (t) fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(t.value), { method: "POST", mode: "no-cors" }).catch(() => {});
-      ["token", "email", "folderId", "folderFor"].forEach(S.del); render();
+      ["token", "email", "folderId", "folderFor", "scopes"].forEach(S.del); render(); if (curTab === "library") Lib.load();
     },
   };
   async function api(method, url, opts = {}) {
@@ -560,19 +564,88 @@
     $("sDone").onclick = () => { save(); closeSheet(); render(); Queue.kick(); };
   }
 
+
+  // ---------------------------------------------------------------- Library: recordings in Drive, with the captions and notes Claude prepares
+  // Claude writes "Captions/<audio id>.captions.json" (+ .mp4/.srt when rendered) and puts a JSON summary in each file's description;
+  // the studio writes "Studio/<audio id>.edits.json" (look, word corrections, render request).
+  const D = window.VCDrive;
+  let curTab = "record";
+  function showTab(t) {
+    curTab = t; S.set("tab", t);
+    document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.t === t));
+    ["record", "library"].forEach((x) => $("tab-" + x).classList.toggle("on", x === t));
+    history.replaceState(null, "", APP_URL + location.search + (t === "library" ? "#library" : ""));
+    if (t === "library") Lib.load();
+  }
+  $("tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-t]"); if (b) showTab(b.dataset.t); });
+  const Lib = {
+    loading: false,
+    card(html, btn, act) { return `<div class="lib-card">${html}${btn ? `<button class="btn primary" data-lib="${act}">${btn}</button>` : ""}</div>`; },
+    async load() {
+      const host = $("libBody");
+      if (!Auth.token()) { host.innerHTML = this.card(S.get("email", "") ? "Google sign-in has expired." : "Connect Google Drive to see your recordings and their captions.", "Connect Google Drive", "connect"); return; }
+      if (!D.canRead()) {
+        host.innerHTML = this.card(`<b>One more permission.</b> To show the captions Claude prepares, the app needs to read Drive files it didn't create itself. Google will ask to let Voice capture “see and download all your Google Drive files”. The app only reads your “${esc(conf().folderName)}” folder.`, "Allow read access", "connect");
+        return;
+      }
+      if (this.loading) return; this.loading = true;
+      if (!host.querySelector(".item")) host.innerHTML = `<div class="empty">Loading…</div>`;
+      try {
+        const inbox = await ensureFolder();
+        const [audio, cap, studio] = await Promise.all([
+          D.list(`'${inbox}' in parents and mimeType contains 'audio/' and trashed = false`, "id,name,createdTime,size,appProperties", "createdTime desc"),
+          D.findFolder("Captions", inbox), D.findFolder("Studio", inbox)]);
+        const [capFiles, edFiles] = await Promise.all([
+          cap ? D.list(`'${cap}' in parents and trashed = false`, "id,name,modifiedTime,description") : [],
+          studio ? D.list(`'${studio}' in parents and trashed = false`, "id,name,modifiedTime,description") : []]);
+        const byId = (files, ext) => { const m = {}; for (const f of files) { const k = f.name.endsWith(ext) ? f.name.slice(0, -ext.length) : null; if (k && !m[k]) m[k] = f; } return m; };
+        const caps = byId(capFiles, ".captions.json"), eds = byId(edFiles, ".edits.json");
+        this.render(audio, caps, eds);
+      } catch (e) {
+        host.innerHTML = this.card(esc(e.message || String(e)), e instanceof D.AuthError || e instanceof AuthError ? "Sign in again" : "Try again", e instanceof D.AuthError || e instanceof AuthError ? "connect" : "retry");
+      } finally { this.loading = false; }
+    },
+    render(audio, caps, eds) {
+      const host = $("libBody");
+      if (!audio.length) { host.innerHTML = `<div class="empty">Nothing in “${esc(conf().folderName)}” yet.</div>`; return; }
+      const waiting = audio.filter((f) => !caps[f.id]).length;
+      host.innerHTML = (waiting ? `<div class="lib-note">${waiting} recording${waiting > 1 ? "s" : ""} waiting for Claude. Say “process my voice notes” in Claude to transcribe ${waiting > 1 ? "them" : "it"}, make captions and add ${waiting > 1 ? "them" : "it"} to Notion.</div>` : "") +
+        audio.map((f) => {
+          const c = caps[f.id], cm = c ? D.meta(c.description) : {}, em = eds[f.id] ? D.meta(eds[f.id].description) : {};
+          const asked = em.renderAt && em.renderAt > (cm.videoAt || 0), pending = em.fixes && (em.base || 1) >= (cm.rev || 1);
+          const badge = !c ? `<span class="badge b-wait">Waiting for Claude</span>` : asked ? `<span class="badge b-go">Render requested</span>` : cm.videoId ? `<span class="badge b-video">Video ready</span>` : `<span class="badge b-ready">Ready to tune</span>`;
+          const dur = (f.appProperties && +f.appProperties.durationSec) || cm.duration || 0;
+          const name = (cm.title || f.name.replace(/\.[^.]+$/, ""));
+          const notes = [when(Date.parse(f.createdTime)), dur ? fmtDur(dur) : "", pending ? `${em.fixes} correction${em.fixes > 1 ? "s" : ""} for Claude` : ""].filter(Boolean).join(" · ");
+          return `<div class="item${c ? " tap" : ""}" data-aid="${f.id}" data-ready="${c ? 1 : 0}"><div class="top"><div class="name">${esc(name)}</div>${badge}</div>
+            <div class="meta">${esc(notes)}</div>
+            <div class="acts">${c ? `<button data-lib="open">Open studio</button>` : ""}${cm.notion ? `<a href="${esc(cm.notion)}" target="_blank" rel="noopener">Notion</a>` : ""}${cm.videoId ? `<a href="https://drive.google.com/file/d/${esc(cm.videoId)}/view" target="_blank" rel="noopener">Video</a>` : ""}<a href="https://drive.google.com/file/d/${f.id}/view" target="_blank" rel="noopener">Audio</a></div></div>`;
+        }).join("");
+    },
+  };
+  $("libBody").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-lib]"), it = e.target.closest(".item");
+    if (e.target.closest("a")) return;
+    if (b && b.dataset.lib === "connect") { S.set("tab", "library"); Auth.signIn(false); return; }
+    if (b && b.dataset.lib === "retry") { Lib.load(); return; }
+    if (it && it.dataset.ready === "1") location.href = "studio.html?id=" + encodeURIComponent(it.dataset.aid);
+  });
+  $("libRefresh").onclick = () => Lib.load();
+
   // ---------------------------------------------------------------- start
   (async () => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
     try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
     const back = Auth.fromRedirect();
     if (back && back.ok) { await fetchEmail(); S.del("silentAt"); }
-    else if (back && back.error && !back.silent) notice(back.error === "access_denied" ? "Google access wasn't granted." : "Google sign-in didn't finish (" + back.error + ").");
+    else if (back && back.error && !back.silent) notice(back.error === "access_denied" ? "Google access wasn't granted." : back.error === "admin_policy_enforced" ? "This Google account's administrator doesn't allow that permission for this app." : "Google sign-in didn't finish (" + back.error + ").");
+    showTab(location.hash === "#library" ? "library" : back ? S.get("tab", "record") : "record");
     await recover();
     await cleanup();
     await render();
-    const wantRecord = !back && (new URLSearchParams(location.search).has("record") || conf().autoStart);
+    const wantRecord = !back && curTab === "record" && (new URLSearchParams(location.search).has("record") || conf().autoStart);
     if (wantRecord) startRecording();
     else Queue.kick();
   })();
-  window.__vc = { DB, Queue, Auth, conf, S, startRecording, stopRecording, cur: () => cur };
+  window.__vc = { DB, Queue, Auth, conf, S, startRecording, stopRecording, cur: () => cur, Lib, showTab };
 })();
