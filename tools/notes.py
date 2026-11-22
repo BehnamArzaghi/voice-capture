@@ -5,8 +5,10 @@
   notes.py prepare AUDIO --id ID --title T [--recorded ISO] [--vocab FILE]
         transcribe (accurate settings + forced alignment) -> WORK/ID/: captions.json, listen.m4a, verbatim.txt, clean.txt
   notes.py join OUT PART [PART ...] [--sha256 HEX]  rebuild a long recording from its Drive "Parts" pieces
+  notes.py restore AUDIO CAPTIONS.json             rebuild WORK/ID in a fresh session (before apply/render)
   notes.py apply WORK/ID EDITS.json [--vocab FILE]  bake the studio's word corrections in (re-timed), rev+1, remap for the app
   notes.py render WORK/ID EDITS.json               render the requested video (+ .srt) with the studio's look
+  notes.py set WORK/ID key=value ...               set captions fields before upload (listen=<Drive id of the listening copy>)
   notes.py ref FILE                                file reference for the Drive connector's create_file (no bytes through chat)
 
 Drive layout (inside "Voice Notes Inbox"):
@@ -66,11 +68,12 @@ def write_captions(d, meta, data):
     return cap
 
 
-def describe(meta, notion=None, video_id=None, srt_id=None):
-    """Short JSON for the Drive file description of ID.captions.json; the app's Library reads it without downloading."""
-    m = {"rev": meta.get("rev", 1), "title": meta.get("title"), "duration": round(meta.get("duration", 0))}
-    if notion: m["notion"] = notion
-    if video_id: m.update(videoId=video_id, videoAt=(meta.get("video") or {}).get("at", 0), srtId=srt_id)
+def describe(meta):
+    """Short JSON for the Drive file description of ID.captions.json; the app's Library reads it without downloading.
+    Carries notion / videoId / srtId once they are set (notes.py set ... notion=URL videoId=ID srtId=ID)."""
+    m = {"rev": meta.get("rev", 1), "title": meta.get("title"), "duration": round(meta.get("duration") or 0)}
+    if meta.get("notion"): m["notion"] = meta["notion"]
+    if meta.get("videoId"): m.update(videoId=meta["videoId"], videoAt=(meta.get("video") or {}).get("at", 0), srtId=meta.get("srtId"))
     return json.dumps(m, separators=(",", ":"))
 
 
@@ -161,7 +164,36 @@ def cmd_render(a):
     write_captions(d, meta, cap["data"])
     mp4 = f"{d}/voicecap_full.mp4"
     print(json.dumps({"mp4_ref": ref(mp4), "mp4_mb": round(os.path.getsize(mp4) / 1e6, 1), "srt_ref": ref(f"{d}/captions.srt"),
-                      "captions_ref": ref(f"{d}/captions.json")}, indent=1))
+                      "next": "upload mp4 + srt to Captions, then: notes.py set DIR videoId=<mp4 id> srtId=<srt id>, upload captions.json, set its description"}, indent=1))
+
+
+def cmd_restore(a):
+    sys.path.insert(0, HERE)
+    import vc
+    cap = json.load(open(a.captions))
+    d = os.path.join(WORK, cap["audioId"])
+    os.makedirs(d, exist_ok=True)
+    vc.prepare(a.audio, d)
+    data = cap["data"]
+    words = {"duration": data.get("duration"), "lang": data.get("lang", "en"), "words": data["words"]}
+    json.dump(words, open(f"{d}/words.json", "w"))
+    json.dump(words, open(f"{d}/words.whisper.json", "w"))  # current timings anchor any re-alignment
+    json.dump(data, open(f"{d}/data.json", "w"))
+    shutil.copy(a.captions, f"{d}/captions.json")
+    json.dump({k: v for k, v in cap.items() if k != "data"}, open(f"{d}/meta.json", "w"), indent=1)
+    verb, clean = texts(data["words"])
+    open(f"{d}/verbatim.txt", "w").write(verb); open(f"{d}/clean.txt", "w").write(clean)
+    print(json.dumps({"dir": d, "rev": cap.get("rev", 1), "words": len(data["words"])}))
+
+
+def cmd_set(a):
+    cap = json.load(open(f"{a.dir}/captions.json"))
+    meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
+    for kv in a.pairs:
+        k, v = kv.split("=", 1)
+        meta[k] = None if v in ("", "null") else v
+    write_captions(a.dir, meta, cap["data"])
+    print(json.dumps({"captions_ref": ref(f"{a.dir}/captions.json"), "description": describe(meta)}, indent=1))
 
 
 def main():
@@ -174,6 +206,8 @@ def main():
     x = sp.add_parser("apply"); x.add_argument("dir"); x.add_argument("edits"); x.add_argument("--vocab")
     r = sp.add_parser("render"); r.add_argument("dir"); r.add_argument("edits")
     f = sp.add_parser("ref"); f.add_argument("file")
+    rs = sp.add_parser("restore"); rs.add_argument("audio"); rs.add_argument("captions")
+    st = sp.add_parser("set"); st.add_argument("dir"); st.add_argument("pairs", nargs="+")
     a = ap.parse_args()
     if a.cmd == "setup":
         sh(sys.executable, VC, "setup")
@@ -185,6 +219,10 @@ def main():
         cmd_apply(a)
     elif a.cmd == "render":
         cmd_render(a)
+    elif a.cmd == "restore":
+        cmd_restore(a)
+    elif a.cmd == "set":
+        cmd_set(a)
     elif a.cmd == "ref":
         print(ref(a.file))
 
