@@ -55,6 +55,9 @@
   .preset b { font:600 14px "Inter"; display:block; }
   .preset span { font:400 12px/1.35 "Inter"; color:var(--ink2); }
   .preset.on { border-color:var(--sel); box-shadow:0 0 0 1px var(--sel); }
+  .preset { position:relative; }
+  .preset .more { position:absolute; top:6px; right:6px; width:30px; height:30px; border-radius:15px; border:0; background:rgba(255,255,255,.72); color:var(--ink); font:600 15px/1 "Inter"; display:grid; place-items:center; cursor:pointer; }
+  .preset .tag { display:inline-block; font:600 10px/1 "Inter"; letter-spacing:.06em; text-transform:uppercase; color:var(--ink3); margin-left:6px; vertical-align:1px; }
   .row { display:flex; gap:8px; flex-wrap:wrap; }
   .chip { min-height:40px; padding:0 14px; border-radius:20px; border:1px solid var(--line); background:var(--card); font:500 13px "Inter"; color:var(--ink); cursor:pointer; }
   .chip.on { background:var(--ink); color:var(--paper); border-color:var(--ink); }
@@ -100,6 +103,8 @@
   .btn.primary { flex:1; background:var(--ink); color:var(--paper); border-color:var(--ink); }
   .toast { position:fixed; left:50%; bottom:92px; transform:translate(-50%,20px); opacity:0; transition:all .28s var(--ease); background:var(--ink); color:var(--paper); font:500 13px/1.35 "Inter"; padding:10px 14px; border-radius:12px; z-index:30; max-width:88vw; text-align:center; }
   .toast.on { opacity:1; transform:translate(-50%,0); }
+  .toast:not(.on) { pointer-events:none; }
+  .toast-act { margin-left:12px; border:0; background:transparent; color:var(--paper); font:700 13px "Inter"; text-decoration:underline; text-underline-offset:3px; cursor:pointer; padding:0; }
   .looks { display:flex; flex-direction:column; gap:8px; }
   .look { display:flex; align-items:center; gap:10px; border:1px solid var(--line); background:var(--card); border-radius:12px; padding:8px 10px; }
   .look .sw2 { width:34px; height:34px; border-radius:8px; flex:none; display:grid; place-items:center; font-size:15px; }
@@ -144,7 +149,7 @@
     .presets { grid-template-columns:repeat(2, 1fr); }
     .sheet { left:auto; right:24px; bottom:24px; width:440px; border-radius:18px; margin:0; transform:translateY(calc(100% + 40px)); max-height:calc(100vh - 48px); overflow:auto; }
     .sheet.on { transform:none; }
-    .toast { bottom:32px; }
+    .toast { bottom:100px; }
   }
 </style>
 </head>
@@ -178,7 +183,6 @@
   </nav>
   <section class="panel on" id="p-look">
     <h2>Looks</h2><div class="presets" id="presets"></div>
-    <div id="savedWrap" style="display:none"><h2>Saved looks</h2><div class="looks" id="saved"></div></div>
     <h2>Color</h2><div class="swatches" id="palettes"></div>
     <h2>Typeface</h2><div class="fonts" id="fonts"></div>
     <h2>Placement</h2><div class="seg" id="placement"></div>
@@ -315,7 +319,8 @@ function syncUI() {
   $("flHelp").textContent = P.fillers === "show" ? "Shown in the quiet color, timed to the moment they are spoken." : "Left out of the captions; the words close up and the typing pauses while they are spoken.";
   if (data && P.fillers !== shownFillers) renderWords();
   const edited = Object.keys(diff()).length > 1;
-  document.querySelectorAll("#presets .preset").forEach((b) => { b.classList.toggle("on", b.dataset.p === P.preset); b.querySelector("b").textContent = b.dataset.p + (b.dataset.p === P.preset && edited ? " · edited" : ""); });
+  document.querySelectorAll("#presets .preset:not(.saved)").forEach((b) => { b.querySelector("b").textContent = b.dataset.p + (b.dataset.p === P.preset && edited ? " · edited" : ""); });
+  markLooks();
   $("undo").disabled = !hist.length; $("redo").disabled = !fut.length;
 }
 
@@ -509,21 +514,80 @@ function openWord(i) {
 }
 
 // ---------- looks, render requests (shared storage when available, this device otherwise)
-function toast(msg, ms = 2600) { const t = $("toast"); t.textContent = msg; t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), ms); }
+function toast(msg, ms = 2600, action) {
+  const t = $("toast"); t.textContent = msg;
+  if (action) { const b = document.createElement("button"); b.className = "toast-act"; b.textContent = action.label; b.onclick = () => { t.classList.remove("on"); action.run(); }; t.appendChild(b); }
+  t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), ms);
+}
+// Saved looks sit in the Looks grid after the built-in ones; they are kept in Drive (Studio/looks.json), shared by every recording
+const lookKey = (p) => JSON.stringify(Object.keys(p).sort().filter((k) => k !== "edits" && k !== "thEdits").map((k) => [k, p[k]]));
+function activeLook() { const k = lookKey(diff()); return looks.find((L) => lookKey(L.params) === k) || null; }
 function drawLooks() {
-  $("savedWrap").style.display = looks.length ? "block" : "none";
-  $("saved").innerHTML = "";
+  document.querySelectorAll("#presets .preset.saved").forEach((b) => b.remove());
   looks.forEach((L) => {
     const pp = VC.params(L.params), pal = VC.PALETTES[pp.palette] || VC.PALETTES.Blush;
-    const d = document.createElement("div"); d.className = "look";
-    d.innerHTML = `<div class="sw2" style="background:${pal.bg};color:${pal.ink};font-family:'${pp.font}'">Aa</div><b></b><button class="chip">Use</button><button class="chip" aria-label="Delete">✕</button>`;
-    d.querySelector("b").textContent = L.name;
-    const [use, del] = d.querySelectorAll("button");
-    use.onclick = () => { setP(Object.assign(VC.params(L.params), { edits: P.edits, thEdits: P.thEdits })); toast(`Using “${L.name}”`); };
-    del.onclick = async () => { looks = looks.filter((x) => x.id !== L.id); drawLooks(); persistLooks(L.id); };
-    $("saved").appendChild(d);
+    const b = document.createElement("div"); b.className = "preset saved"; b.dataset.look = L.id; b.setAttribute("role", "button"); b.tabIndex = 0;
+    b.innerHTML = `<div class="sw" style="background:${pal.bg};color:${pal.ink};font-family:'${pp.font}';font-weight:${Math.min(700, pp.weight + 150)}">Aa <span style="color:${VC.themeColors(pal, 1)[0]};margin-left:6px">voice</span></div><div class="meta"><b></b><span></span></div><button class="more" aria-label="Rename, update or delete">⋯</button>`;
+    b.querySelector("b").textContent = L.name;
+    b.querySelector(".meta span").innerHTML = `${escH(pp.preset)} · ${escH(pp.palette)} · ${escH(pp.font)}<span class="tag">Saved</span>`;
+    const use = () => { setP(Object.assign(VC.params(L.params), { edits: P.edits, thEdits: P.thEdits })); toast(`Using “${L.name}”`); };
+    b.onclick = (e) => { if (!e.target.closest(".more")) use(); };
+    b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); use(); } };
+    b.querySelector(".more").onclick = (e) => { e.stopPropagation(); lookSheet(L); };
+    $("presets").appendChild(b);
   });
+  markLooks();
 }
+function markLooks() {  // highlight the saved look in use (else the built-in one), and show it on the Save button
+  const L = activeLook();
+  document.querySelectorAll("#presets .preset").forEach((b) => b.classList.toggle("on", L ? b.dataset.look === L.id : b.dataset.p === P.preset));
+  const btn = $("saveBtn"); btn.textContent = L ? "Saved ✓" : "Save look"; btn.title = L ? `This is your saved look “${L.name}”` : "";
+}
+function sheetOpen(html) { $("sheetBody").innerHTML = html; $("sheet").classList.add("on"); followBtn(); }
+function sheetClose() { $("sheet").classList.remove("on"); followBtn(); }
+function uniqueName(n) { let name = n, i = 2; while (looks.some((L) => L.name === name)) name = `${n} ${i++}`; return name; }
+function saveLookSheet() {
+  const L = activeLook();
+  if (L) { toast(`Already saved as “${L.name}”`); return; }
+  const d = diff(), edited = Object.keys(d).length > 1;
+  const name = uniqueName(`${P.preset}${edited ? " · edited" : ""} · ${P.palette}`);
+  sheetOpen(`<div class="w">Save this look</div>
+    <p class="muted" style="margin:-6px 0 12px">Saved looks appear in Looks for every recording.</p>
+    <input class="name" id="lookName" value="${escH(name)}" maxlength="40" autocomplete="off" enterkeyhint="done" aria-label="Look name">
+    <div class="row" style="margin-top:14px"><button class="btn primary" id="lookSave" style="flex:1">Save</button><button class="btn" id="lookCancel">Cancel</button></div>`);
+  const inp = $("lookName"); setTimeout(() => { inp.focus(); inp.select(); }, 280);
+  const go = () => {
+    const n = inp.value.replace(/\s+/g, " ").trim() || name;
+    const L = { id: "L" + Date.now().toString(36), name: uniqueName(n), params: diff(), at: Date.now() };
+    looks.push(L); drawLooks(); persistLooks(); sheetClose(); toast(`Saved “${L.name}” to Looks`);
+    const card = document.querySelector(`#presets .preset.saved[data-look="${L.id}"]`);  // bring the new card into view above the buttons
+    if (card && $("p-look").classList.contains("on")) {
+      const bottom = DESK.matches ? window.innerHeight - 24 : $("footer").querySelector(".in").getBoundingClientRect().top - 12;
+      const r = card.getBoundingClientRect(), top = $("tabs").getBoundingClientRect().bottom + 12;
+      const dy = r.top < top ? r.top - top : r.bottom > bottom ? r.bottom - bottom : 0;
+      if (dy) window.scrollBy({ top: dy, behavior: "smooth" });
+    }
+  };
+  $("lookSave").onclick = go; inp.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+  $("lookCancel").onclick = sheetClose;
+}
+function lookSheet(L) {
+  sheetOpen(`<div class="w">${escH(L.name)}</div>
+    <h2 style="margin-top:0">Name</h2>
+    <div class="fixrow"><input class="name" id="lookName" value="${escH(L.name)}" maxlength="40" autocomplete="off" enterkeyhint="done"><button class="chip" id="lookRename">Rename</button></div>
+    <div class="row" style="margin-top:14px"><button class="chip" id="lookUpdate">Replace with the current look</button><button class="chip" id="lookDel">Delete</button></div>
+    <div class="row" style="margin-top:16px"><button class="btn" id="lookUse" style="flex:1">Use this look</button><button class="btn" id="lookClose">Done</button></div>`);
+  const ren = () => { const n = $("lookName").value.replace(/\s+/g, " ").trim(); if (n && n !== L.name) { L.name = uniqueName(n); drawLooks(); persistLooks(); toast(`Renamed to “${L.name}”`); } sheetClose(); };
+  $("lookRename").onclick = ren; $("lookName").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); ren(); } });
+  $("lookUpdate").onclick = () => { L.params = diff(); L.at = Date.now(); drawLooks(); persistLooks(); sheetClose(); toast(`“${L.name}” now matches the current look`); };
+  $("lookDel").onclick = () => {
+    const i = looks.indexOf(L); looks = looks.filter((x) => x !== L); drawLooks(); persistLooks(); sheetClose();
+    toast(`Deleted “${L.name}”`, 5000, { label: "Undo", run: () => { looks.splice(Math.min(i, looks.length), 0, L); drawLooks(); persistLooks(); } });
+  };
+  $("lookUse").onclick = () => { setP(Object.assign(VC.params(L.params), { edits: P.edits, thEdits: P.thEdits })); sheetClose(); };
+  $("lookClose").onclick = sheetClose;
+}
+$("saveBtn").onclick = saveLookSheet;
 async function persistLooks() {
   try { localStorage.setItem("vc2-looks", JSON.stringify(looks)); } catch (e) {}
   if (!studioId) return;
