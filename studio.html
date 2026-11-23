@@ -116,10 +116,41 @@
   .blocker { padding:40px 22px; font:400 15px/1.5 "Inter"; color:var(--ink2); text-align:center; }
   .blocker a { color:var(--ink); font-weight:600; }
   textarea.recipe { width:100%; min-height:70px; border-radius:12px; border:1px solid var(--line); background:var(--card); font:12px ui-monospace,Menlo,monospace; padding:10px; color:var(--ink2); }
+  /* two columns on wide screens (see the media query below); on phones these wrappers lay out as if absent */
+  .left, .right { display:contents; }
+  /* Words tab: the filler toggle stays pinned under the tabs while the transcript scrolls */
+  .wordbar { position:sticky; top:var(--wb-top, 0px); z-index:3; background:var(--paper); margin:-18px -16px 14px; padding:10px 16px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  .wordbar .lbl { font:600 11px/1.25 "Inter"; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); flex:none; }
+  .wordbar .lbl span { display:block; text-transform:none; letter-spacing:0; font-weight:500; margin-top:2px; }
+  .wordbar .seg { flex:1; max-width:300px; margin-left:auto; }
+  .wordbar .seg button { min-height:34px; }
+  /* shown when you scroll away from the playing word; tap to follow along again */
+  .follow { position:fixed; left:50%; bottom:96px; z-index:12; transform:translate(-50%, 14px); opacity:0; pointer-events:none; border:0; border-radius:22px; background:var(--ink); color:var(--paper); font:600 13px "Inter"; height:40px; padding:0 16px 0 13px; display:flex; align-items:center; gap:7px; box-shadow:0 10px 26px -10px rgba(28,27,25,.55); transition:opacity .2s var(--ease), transform .2s var(--ease); cursor:pointer; white-space:nowrap; }
+  .follow.on { opacity:1; transform:translate(-50%, 0); pointer-events:auto; }
+  .follow b { font-size:16px; line-height:1; font-weight:500; }
+  @media (min-width:1000px) {
+    .wrap { max-width:1440px; display:grid; grid-template-columns:minmax(0, 1.55fr) minmax(400px, 1fr); column-gap:0; padding:0 0 0 28px; }
+    .left { display:flex; flex-direction:column; position:sticky; top:0; height:100vh; min-width:0; padding-right:28px; }
+    .right { display:block; min-width:0; border-left:1px solid var(--line); min-height:100vh; }
+    header { padding:14px 0 8px; }
+    .top { position:static; padding:0 0 4px; flex:1; display:flex; flex-direction:column; justify-content:center; min-height:0; }
+    .footer { position:static; background:none; padding:12px 0 22px; }
+    .footer .in { max-width:none; }
+    nav.tabs { top:0 !important; padding:8px 20px 0; }
+    section.panel { padding:20px 24px 80px; }
+    .wordbar { margin:-20px -24px 14px; padding:10px 24px; }
+    .words { font-size:17px; }
+    .follow { bottom:28px; }
+    .presets { grid-template-columns:repeat(2, 1fr); }
+    .sheet { left:auto; right:24px; bottom:24px; width:440px; border-radius:18px; margin:0; transform:translateY(calc(100% + 40px)); max-height:calc(100vh - 48px); overflow:auto; }
+    .sheet.on { transform:none; }
+    .toast { bottom:32px; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap">
+ <div class="left" id="left">
   <header>
     <a class="icon-btn" href="./#library" aria-label="Back to Library">‹</a>
     <h1 id="title">Studio</h1>
@@ -136,6 +167,12 @@
     </div>
     <button class="grab" id="grab" aria-label="Video size: drag up to shrink, down to enlarge, or tap to cycle"></button>
   </div>
+  <div class="footer" id="footer"><div class="in">
+    <button class="btn" id="saveBtn">Save look</button>
+    <button class="btn primary" id="renderBtn">Render video</button>
+  </div></div>
+ </div>
+ <div class="right" id="right">
   <nav class="tabs" id="tabs">
     <button data-t="look" class="on">Look</button><button data-t="voice">Voice</button><button data-t="motion">Motion</button><button data-t="words">Words</button>
   </nav>
@@ -160,17 +197,15 @@
     <div id="motion-sliders" style="margin-top:12px"></div>
   </section>
   <section class="panel" id="p-words">
-    <h2 style="margin-top:4px">Filler words <span id="flCount" style="text-transform:none;letter-spacing:0;font-weight:500"></span></h2><div class="seg" id="fillers"></div>
-    <p class="muted" id="flHelp" style="margin:8px 0 18px"></p>
+    <div class="wordbar" id="wordbar"><div class="lbl">Filler words<span id="flCount"></span></div><div class="seg" id="fillers"></div></div>
+    <p class="muted" id="flHelp" style="margin:0 0 10px"></p>
     <p class="muted" style="margin-top:0">Tap a word to correct it or change its emphasis. Dotted words may be misheard. Corrections show right away; Claude re-times them and learns new names the next time it processes your voice notes.</p>
     <p class="muted" id="fixCount" style="margin-top:0"></p>
     <div class="words" id="words"></div>
   </section>
+ </div>
 </div>
-<div class="footer"><div class="in">
-  <button class="btn" id="saveBtn">Save look</button>
-  <button class="btn primary" id="renderBtn">Render video</button>
-</div></div>
+<button class="follow" id="follow" aria-label="Follow the playing word"><b id="followArrow">↓</b><span id="followText">Back to current word</span></button>
 <div class="sheet" id="sheet"><div class="grab"></div><div id="sheetBody"></div></div>
 <div class="toast" id="toast"></div>
 <audio id="au" preload="auto" playsinline></audio>
@@ -267,7 +302,7 @@ function build() {
   document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => {
     document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x === b));
     document.querySelectorAll("section.panel").forEach((s) => s.classList.toggle("on", s.id === "p-" + b.dataset.t));
-    if (b.dataset.t === "words") markWord(true);
+    if (b.dataset.t === "words") { follow = true; markWord(true); } else followBtn();
   }));
 }
 function syncUI() {
@@ -299,17 +334,29 @@ function rebuild() {
 // stage size: 0.3-1 of the full width; drag the bar under the transport, or tap it to cycle large / medium / small
 let stageScale = 1;
 try { stageScale = Math.min(1, Math.max(0.3, +localStorage.getItem("vc2-stage") || 1)); } catch (e) {}
+const DESK = window.matchMedia("(min-width:1000px)");
 function stageBox(scale) {
-  const r = scene.W / scene.H, w = Math.min(document.querySelector(".top").clientWidth - 32, 728), maxH = window.innerHeight * 0.48;
+  const r = scene.W / scene.H, top = document.querySelector(".top");
+  let w, maxH;
+  if (DESK.matches) {  // left column: the stage takes the room the header, transport and buttons leave
+    w = top.clientWidth;
+    maxH = window.innerHeight - document.querySelector("header").offsetHeight - document.querySelector(".transport").offsetHeight
+      - $("grab").offsetHeight - $("footer").offsetHeight - 16;
+  } else { w = Math.min(top.clientWidth - 32, 728); maxH = window.innerHeight * 0.48; }
   let cw = w, ch = w / r; if (ch > maxH) { ch = maxH; cw = ch * r; }
   return [cw * scale, ch * scale, ch];
+}
+function pinOffsets() {  // sticky offsets: phone = under the stage, desktop = top of the right column
+  const tabsTop = DESK.matches ? 0 : document.querySelector(".top").offsetHeight;
+  $("tabs").style.top = tabsTop + "px";
+  document.documentElement.style.setProperty("--wb-top", tabsTop + $("tabs").offsetHeight + "px");
 }
 function resize(cssOnly) {
   if (!scene) return;
   const [cw, ch] = stageBox(stageScale);
   const st = $("stage"); st.style.width = cw + "px"; st.style.height = ch + "px"; $("hint").style.display = cw < 260 ? "none" : "";
   if (!cssOnly) { const dpr = Math.min(2, window.devicePixelRatio || 1); cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr); dirty = true; }
-  $("tabs").style.top = document.querySelector(".top").offsetHeight + "px";
+  pinOffsets();
 }
 (() => {
   const g = $("grab"); let y0 = 0, s0 = 1, h0 = 1, moved = false, down = false;
@@ -348,10 +395,10 @@ function legend() {
 let seeking = false;
 const toggle = () => { if (au.paused) au.play().catch(() => {}); else au.pause(); };
 au.addEventListener("play", () => { $("play").textContent = "❚❚"; $("hint").style.opacity = 0; });
-au.addEventListener("pause", () => { $("play").textContent = "▶"; dirty = true; });
+au.addEventListener("pause", () => { $("play").textContent = "▶"; dirty = true; followBtn(); });
 au.addEventListener("seeked", () => (dirty = true));
 $("play").onclick = toggle;
-$("seek").addEventListener("input", () => { seeking = true; if (au.duration) au.currentTime = (au.duration * $("seek").value) / 1000; $("seek").style.setProperty("--p", $("seek").value / 10 + "%"); dirty = true; });
+$("seek").addEventListener("input", () => { seeking = true; follow = true; if (au.duration) au.currentTime = (au.duration * $("seek").value) / 1000; $("seek").style.setProperty("--p", $("seek").value / 10 + "%"); dirty = true; });
 $("seek").addEventListener("change", () => (seeking = false));
 // stage: tap = play/pause or word, hold = compare with Plain
 let holdT = null, held = false;
@@ -373,7 +420,7 @@ function renderWords() {
   const host = $("words"); host.innerHTML = ""; shownFillers = P.fillers;
   const nf = data.words.filter((w) => w.fl).length, nx = Object.keys(fixes).length;
   $("fixCount").textContent = nx ? `${nx} correction${nx > 1 ? "s" : ""} waiting for Claude to re-time.` : "";
-  $("flCount").textContent = nf ? `· ${nf} in this recording` : "· none tagged";
+  $("flCount").textContent = nf ? `${nf} in this recording` : "none tagged";
   data.words.forEach((w, i) => {
     const s = document.createElement("span"); s.id = "w" + i; const fx = i in fixes; s.textContent = fx ? (fixes[i] || base.words[i].w.trim()) : w.w.trim();
     const ed = P.edits[i];
@@ -382,12 +429,57 @@ function renderWords() {
     s.onclick = () => openWord(i); host.appendChild(s); host.appendChild(document.createTextNode(" "));
   });
 }
+// Following the playing word: the transcript scrolls along while playing until you scroll it yourself;
+// then a button offers the way back (it also comes back on with a seek, "Play from here" or opening the Words tab).
+let follow = true, autoUntil = 0;
+const wordsOn = () => $("p-words").classList.contains("on");
+function viewBand() {  // the part of the window the transcript is visible in, between the pinned bars and the bottom buttons
+  const top = $("wordbar").getBoundingClientRect().bottom;
+  const bot = DESK.matches ? window.innerHeight : $("footer").querySelector(".in").getBoundingClientRect().top - 8;
+  return [top, bot];
+}
+function toCur(el, smooth) {
+  const [top, bot] = viewBand(), r = el.getBoundingClientRect(), mid = (top + bot) / 2;
+  const dy = r.top + r.height / 2 - mid;
+  if (Math.abs(dy) < 4) return;
+  autoUntil = performance.now() + (smooth ? 900 : 250);
+  window.scrollBy({ top: dy, behavior: smooth && Math.abs(dy) < (bot - top) * 1.5 ? "smooth" : "auto" });
+}
+function setFollow(v, scroll) {
+  follow = v;
+  if (v && scroll) { const el = $("w" + lastW); if (el) toCur(el, false); }
+  followBtn();
+}
+function followBtn() {
+  const btn = $("follow"), el = $("w" + lastW);
+  let show = false;
+  if (!follow && wordsOn() && el && !$("sheet").classList.contains("on")) {
+    const [top, bot] = viewBand(), r = el.getBoundingClientRect(), inView = r.bottom > top && r.top < bot;
+    show = !au.paused || !inView;
+    $("followArrow").textContent = inView ? "↧" : r.top < top ? "↑" : "↓";
+    $("followText").textContent = inView ? "Follow along" : "Back to current word";
+    const pr = $("p-words").getBoundingClientRect(); btn.style.left = pr.left + pr.width / 2 + "px";
+  }
+  btn.classList.toggle("on", show);
+}
+function userScrolled(e) {
+  if (e && e.target && e.target.closest && e.target.closest(".top, .sheet, .footer, nav.tabs, .follow")) return;
+  if (follow && wordsOn() && !au.paused) setFollow(false);
+}
+window.addEventListener("wheel", userScrolled, { passive: true });
+window.addEventListener("touchmove", userScrolled, { passive: true });
+window.addEventListener("keydown", (e) => { if (/^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End)$/.test(e.key) && !/INPUT|TEXTAREA/.test(e.target.tagName)) userScrolled(); });
+window.addEventListener("scroll", () => { if (performance.now() > autoUntil) userScrolled(); followBtn(); }, { passive: true });
+$("follow").onclick = () => setFollow(true, true);
 function markWord(force) {
-  if (!data || !$("p-words").classList.contains("on")) return;
+  if (!data || !wordsOn()) return;
   const t = au.currentTime; let lo = 0, hi = data.words.length - 1, wi = -1;
   while (lo <= hi) { const m = (lo + hi) >> 1; if (data.words[m].s <= t) { wi = m; lo = m + 1; } else hi = m - 1; }
-  if (wi === lastW && !force) return;
-  const a = $("w" + lastW); if (a) a.classList.remove("cur"); const b = $("w" + wi); if (b) { b.classList.add("cur"); if (!au.paused) b.scrollIntoView({ block: "center", behavior: "smooth" }); } lastW = wi;
+  if (wi === lastW && !force) { if (!follow) followBtn(); return; }
+  const a = $("w" + lastW); if (a) a.classList.remove("cur"); const b = $("w" + wi); if (b) b.classList.add("cur");
+  const jumped = Math.abs(wi - lastW) > 3; lastW = wi;
+  if (b && follow && (!au.paused || force)) toCur(b, !force && !jumped);
+  followBtn();
 }
 function openWord(i) {
   const w = data.words[i], orig = base.words[i].w.trim(), ed = P.edits[i] || "auto", th = P.thEdits[i] != null ? P.thEdits[i] : w.th != null ? w.th : -1;
@@ -400,7 +492,7 @@ function openWord(i) {
     <h2>Emphasis</h2><div class="seg" id="edSeg">${[["auto", "Auto"], ["emph", "Emphasize"], ["normal", "Normal"], ["quiet", "Quieter"]].map(([v, l]) => `<button data-v="${v}" class="${ed === v ? "on" : ""}">${l}</button>`).join("")}</div>
     <h2>Theme</h2><div class="row" id="thRow"><button class="chip ${th < 0 ? "on" : ""}" data-v="-1">None</button>${themes.map((n, k) => `<button class="chip ${th === k ? "on" : ""}" data-v="${k}"><i style="display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:6px;background:${scene.tcol[k % scene.tcol.length]}"></i>${n}</button>`).join("")}</div>
     <div class="row" style="margin-top:16px"><button class="btn" id="jump" style="flex:1">Play from here</button><button class="btn" id="closeS">Done</button></div>`;
-  $("sheet").classList.add("on");
+  $("sheet").classList.add("on"); followBtn();
   document.querySelectorAll("#edSeg button").forEach((b) => (b.onclick = () => {
     const e = Object.assign({}, P.edits); if (b.dataset.v === "auto") delete e[i]; else e[i] = b.dataset.v; setP({ edits: e }); openWord(i); renderWords();
   }));
@@ -412,8 +504,8 @@ function openWord(i) {
   $("fixIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fixSave").click(); } });
   $("fixDel").onclick = () => setFix("");
   if ($("fixUndo")) $("fixUndo").onclick = () => setFix(null);
-  $("jump").onclick = () => { au.currentTime = Math.max(0, w.s - 1.5); $("sheet").classList.remove("on"); au.play().catch(() => {}); };
-  $("closeS").onclick = () => $("sheet").classList.remove("on");
+  $("jump").onclick = () => { au.currentTime = Math.max(0, w.s - 1.5); $("sheet").classList.remove("on"); follow = true; au.play().catch(() => {}); };
+  $("closeS").onclick = () => { $("sheet").classList.remove("on"); followBtn(); };
 }
 
 // ---------- looks, render requests (shared storage when available, this device otherwise)
@@ -513,14 +605,14 @@ async function boot() {
 }
 
 // ---------- boot
-window.addEventListener("resize", () => { resize(); dirty = true; });
+window.addEventListener("resize", () => { resize(); dirty = true; followBtn(); });
 build(); syncUI();
 try { looks = JSON.parse(localStorage.getItem("vc2-looks") || "[]"); drawLooks(); } catch (e) {}
 document.fonts && document.fonts.addEventListener && document.fonts.addEventListener("loadingdone", () => rebuild());
 requestAnimationFrame(frame);
 setTimeout(() => ($("hint").style.opacity = 0), 6000);
 boot();
-window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, openWord, flush };
+window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, get follow() { return follow; }, openWord, flush };
 </script>
 </body>
 </html>

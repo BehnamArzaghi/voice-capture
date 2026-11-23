@@ -26,6 +26,7 @@ NPM_SHA512 = [
 MODEL_SHA256 = "ca732cb1379efc49417d028465f543d83a39de2c61f3027678de103dc404ce73"
 SR = 16000
 HOP = 160  # 10 ms analysis frames
+ALIGN_TOL = 1.2  # s: a forced-alignment placement further than this from its checked timing is rejected (see fix)
 
 
 FONT_SHA = "cc5661d43cd4f9aad5567033a8e15ca28dc35c86"
@@ -351,9 +352,104 @@ def transcribe(out, lang=None, prompt=None, quality="accurate"):
             last = s.end
             el = time.time() - t0
             log(f"transcribe {100*s.end/dur:5.1f}%  ({el/60:.1f} min elapsed, ~{el*(dur/max(s.end,1)-1)/60:.1f} min left)")
+    log(f"transcribed {len(words)} words, language={info.language}, {(time.time()-t0)/60:.1f} min")
+    if quality != "fast":  # the whole-recording pass can slide its timestamps across long pauses; pin them to a pass that skips silence
+        words, moved = reanchor(words, anchor_pass(audio, info.language, model))
+        log(f"timing check: {moved} words moved back onto their speech")
     json.dump({"duration": dur, "lang": info.language, "words": words}, open(f"{out}/words.json", "w"))
     shutil.copy(f"{out}/words.json", f"{out}/words.whisper.json")  # anchors for later fixes
-    log(f"transcribed {len(words)} words, language={info.language}, {(time.time()-t0)/60:.1f} min")
+
+
+def anchor_pass(audio, lang=None, model=None):
+    """A quick second transcription with silences cut out (VAD). Each stretch of speech is timed on its own, so its timestamps
+    cannot drift through a long pause the way a whole-recording pass can (seen: up to 20 s on a 36-min walk). Used for timing only."""
+    if model is None:
+        from faster_whisper import WhisperModel
+        model = WhisperModel(MODEL_DIR, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 2)
+    t0 = time.time()
+    segs, _ = model.transcribe(audio, language=lang, beam_size=1, condition_on_previous_text=False, word_timestamps=True,
+                               vad_filter=True, vad_parameters={"min_silence_duration_ms": 700, "speech_pad_ms": 300})
+    ref = [{"w": w.word, "s": round(w.start, 3), "e": round(w.end, 3)} for s in segs for w in (s.words or [])]
+    log(f"timing pass: {len(ref)} words, {(time.time()-t0)/60:.1f} min")
+    return ref
+
+
+def reanchor(words, ref, tol=0.8):
+    """Move words whose time disagrees with the timing pass REF. A word moves when it and most of its matched neighbours are off
+    by more than TOL seconds (so one common word matched to the wrong place moves nothing). Words REF lacks, next to a moved
+    stretch, are spread between their moved neighbours. Text is untouched; returns (words, number moved)."""
+    import bisect
+    sm = difflib.SequenceMatcher(a=[_norm(w["w"]) for w in words], b=[_norm(w["w"]) for w in ref], autojunk=False)
+    m = {}
+    for op, i1, i2, j1, j2 in sm.get_opcodes():
+        if op == "equal":
+            for q in range(i2 - i1):
+                m[i1 + q] = j1 + q
+    keys = sorted(m)
+    off = [ref[m[i]]["s"] - words[i]["s"] for i in keys]
+    out = [dict(w) for w in words]
+    moved = set()
+    for k, i in enumerate(keys):
+        nb = sorted(abs(x) for x in off[max(0, k - 3):k + 4])
+        if abs(off[k]) > tol and nb[len(nb) // 2] > tol:
+            r = ref[m[i]]; out[i]["s"], out[i]["e"] = r["s"], r["e"]; moved.add(i)
+    for _ in range(3):  # a matched word left just under TOL can end up out of order with moved neighbours: move it too
+        for k, i in enumerate(keys):
+            if i in moved:
+                continue
+            p = keys[k - 1] if k > 0 else None; q = keys[k + 1] if k + 1 < len(keys) else None
+            if (p in moved and out[p]["s"] > out[i]["s"]) or (q in moved and out[q]["s"] < out[i]["s"]):
+                r = ref[m[i]]; out[i]["s"], out[i]["e"] = r["s"], r["e"]; moved.add(i)
+    n, i = len(words), 0
+    while i < n:  # runs of unmatched words
+        if i in m:
+            i += 1; continue
+        j = i
+        while j < n and j not in m:
+            j += 1
+        k = bisect.bisect_left(keys, i)
+        a = keys[k - 1] if k > 0 else None
+        b = keys[k] if k < len(keys) else None
+        if (a in moved) or (b in moved):
+            t0 = out[a]["e"] if a is not None else 0.0
+            t1 = out[b]["s"] if b is not None else max(t0, words[-1]["e"])
+            if t1 < t0 + 0.05 * (j - i):
+                t1 = t0 + 0.05 * (j - i)
+            step = (t1 - t0) / (j - i)
+            for q in range(i, j):
+                out[q]["s"], out[q]["e"] = round(t0 + step * (q - i), 3), round(t0 + step * (q - i + 1), 3)
+                moved.add(q)
+        i = j
+    for q in range(1, n):  # keep order
+        if out[q]["s"] < out[q - 1]["s"]:
+            out[q]["s"] = out[q - 1]["s"]; out[q]["e"] = max(out[q]["e"], out[q]["s"] + 0.03)
+    return out, len(moved)
+
+
+def retime(out):
+    """Re-time an existing transcript in OUT (words.json + a16.wav, e.g. after notes.py restore) without changing its words:
+    timing pass -> reanchor -> forced alignment. Word count and order stay the same, so studio edits keep their word indices."""
+    J = json.load(open(f"{out}/words.json"))
+    keep = [{k: w[k] for k in ("th", "fn", "wh") if k in w} for w in J["words"]]
+    themes = None
+    if os.path.exists(f"{out}/data.json"):
+        themes = json.load(open(f"{out}/data.json")).get("themes")
+    toks = [w["w"].strip() for w in J["words"]]
+    base = [{"w": w["w"], "s": w["s"], "e": w["e"], "p": w.get("p", 1)} for w in J["words"]]
+    anchored, moved = reanchor(base, anchor_pass(load16(out), J.get("lang")))
+    log(f"timing check: {moved} of {len(base)} words moved back onto their speech")
+    json.dump(dict(J, words=anchored), open(f"{out}/words.whisper.json", "w"))
+    clean = open(f"{out}/clean.txt").read() if os.path.exists(f"{out}/clean.txt") else None
+    fix(out, " ".join(toks), clean)
+    D = json.load(open(f"{out}/data.json"))
+    if len(D["words"]) == len(keep):  # theme tags and display forms carry over by index
+        for w, k in zip(D["words"], keep):
+            for f in ("th", "wh"):
+                if f in k: w[f] = k[f]
+            if "th" in k: w["fn"] = False
+        if themes: D["themes"] = themes
+        json.dump(D, open(f"{out}/data.json", "w"), separators=(",", ":"))
+    return moved
 
 
 # ---------------------------------------------------------------- prosody
@@ -566,7 +662,7 @@ def _silences(x, min_len=0.25):
     return out
 
 
-def force_align(x, tokens, anc_s, anc_e, anchored, chunk_min=10.0, chunk_max=30.0):
+def force_align(x, tokens, anc_s, anc_e, anchored, chunk_min=10.0, chunk_max=30.0, quiet=False):
     """Align tokens (fillers included) to 16 kHz float audio with PocketSphinx, in chunks cut at silences between anchored words.
     A chunk that fails is split at an inner silence and retried. Returns per-token (start, end) or None."""
     from pocketsphinx import Decoder
@@ -641,7 +737,8 @@ def force_align(x, tokens, anc_s, anc_e, anchored, chunk_min=10.0, chunk_max=30.
 
     for (i0, t0), (i1, t1) in zip(cuts[:-1], cuts[1:]):
         span(i0, i1, t0, t1)
-    log(f"forced alignment: {stats['ok']} chunks aligned, {stats['fail']} left on Whisper timing")
+    if not quiet:
+        log(f"forced alignment: {stats['ok']} chunks aligned, {stats['fail']} left on Whisper timing")
     return res
 
 
@@ -714,6 +811,34 @@ def fix(out, text, clean=None):
         al = force_align(load16(out), toks, anc_s, anc_e, anchored)
     except ImportError:
         log("pocketsphinx missing (run setup); keeping Whisper timings"); al = [None] * n
+    # the aligner fits every token of a chunk into its audio; a word Whisper wrote twice can squeeze a whole stretch seconds early.
+    # Anchors are now checked against a silence-skipping pass (see reanchor), so a placement far from its anchor is the aligner's error.
+    far = 0
+    for k in range(n):
+        if al[k] and anchored[k] and abs(al[k][0] - anc_s[k]) > ALIGN_TOL:
+            al[k] = None; far += 1
+    if far:  # align those stretches again on their own, in the window their checked timing gives
+        x16, k, again = load16(out), 0, 0
+        while k < n:
+            if al[k] or not anchored[k]:
+                k += 1; continue
+            j = k
+            while j < n and not al[j] and anchored[j]:
+                j += 1
+            pe = next((al[q][1] for q in range(k - 1, -1, -1) if al[q]), 0.0)
+            ns = next((al[q][0] for q in range(j, n) if al[q]), J["duration"])
+            t0, t1 = max(pe, anc_s[k] - 0.5), min(ns, anc_e[j - 1] + 0.5)
+            if t1 - t0 > 0.15 * (j - k):
+                try:
+                    sub = force_align(x16[int(t0 * SR):int(t1 * SR)], toks[k:j], [v - t0 for v in anc_s[k:j]], [v - t0 for v in anc_e[k:j]],
+                                      anchored[k:j], quiet=True)
+                except Exception:
+                    sub = [None] * (j - k)
+                for q, v in enumerate(sub):
+                    if v and abs(v[0] + t0 - anc_s[k + q]) <= ALIGN_TOL:
+                        al[k + q] = (v[0] + t0, v[1] + t0); again += 1
+            k = j
+        log(f"{far} words the aligner put over {ALIGN_TOL:g} s from their checked timing; {again} re-aligned on their own, the rest keep that timing")
     # rescue: a voiced stretch no aligned word covers, where Whisper heard a word that the aligner squeezed elsewhere
     x = load16(out)
     fr = x[: len(x) // HOP * HOP].reshape(-1, HOP)
@@ -758,6 +883,22 @@ def fix(out, text, clean=None):
     for k in range(1, n):  # keep order monotonic
         if res[k]["s"] < res[k - 1]["s"]:
             res[k]["s"] = res[k - 1]["s"]; res[k]["e"] = max(res[k]["e"], res[k]["s"] + 0.03)
+    k = 1
+    while k < n:  # words left on one instant by the step above would land as a burst: spread them over the room around them
+        if res[k]["s"] != res[k - 1]["s"]:
+            k += 1; continue
+        a, b = k - 1, k
+        while b < n and res[b]["s"] == res[a]["s"]:
+            b += 1
+        hi = res[b]["s"] if b < n else res[a]["s"] + 0.3 * (b - a)
+        lo = res[a]["s"]
+        if hi - lo < 0.12 * (b - a):
+            lo = max((res[a - 1]["s"] + 0.05) if a > 0 else 0.0, hi - 0.12 * (b - a))
+        step = (hi - lo) / (b - a)
+        if step > 0.02:
+            for q in range(a, b):
+                res[q]["s"] = round(lo + step * (q - a), 3); res[q]["e"] = round(max(res[q]["s"] + 0.03, min(res[q]["e"], lo + step * (q - a + 1))), 3)
+        k = b
     J["words"] = res
     json.dump(J, open(f"{out}/words.json", "w"))
     log(f"transcript updated: {n} words ({sum(1 for w in res if w.get('fl'))} fillers), {n_al} placed by forced alignment")
@@ -964,6 +1105,7 @@ def main():
     r.add_argument("--no-normalize", action="store_true")
     f = sp.add_parser("fix"); f.add_argument("dir"); f.add_argument("--text", required=True); f.add_argument("--clean")
     a = sp.add_parser("analyze"); a.add_argument("dir")
+    sp.add_parser("retime").add_argument("dir")
     c = sp.add_parser("concepts"); c.add_argument("dir"); c.add_argument("--file", required=True)
     v = sp.add_parser("render"); v.add_argument("dir"); v.add_argument("--params"); v.add_argument("--start", type=float, default=0)
     v.add_argument("--dur", type=float); v.add_argument("--out"); v.add_argument("--fps", type=int, default=30); v.add_argument("--abr", default="128k")
@@ -983,6 +1125,8 @@ def main():
         fix(A.dir, open(A.text).read(), open(A.clean).read() if A.clean else None)
     elif A.cmd == "analyze":
         analyze(A.dir)
+    elif A.cmd == "retime":
+        retime(A.dir)
     elif A.cmd == "concepts":
         spec = json.load(open(A.file)); shutil.copy(A.file, f"{A.dir}/concepts.json") if os.path.abspath(A.file) != os.path.abspath(f"{A.dir}/concepts.json") else None
         apply_concepts(A.dir, spec)

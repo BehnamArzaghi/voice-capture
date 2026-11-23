@@ -7,6 +7,7 @@
   notes.py join OUT PART [PART ...] [--sha256 HEX]  rebuild a long recording from its Drive "Parts" pieces
   notes.py restore AUDIO CAPTIONS.json             rebuild WORK/ID in a fresh session (before apply/render)
   notes.py apply WORK/ID EDITS.json [--vocab FILE]  bake the studio's word corrections in (re-timed), rev+1, remap for the app
+  notes.py retime AUDIO CAPTIONS.json              fix captions that drift from the audio (same words and rev; studio edits still fit)
   notes.py render WORK/ID EDITS.json               render the requested video (+ .srt) with the studio's look
   notes.py set WORK/ID key=value ...               set captions fields before upload (listen=<Drive id of the listening copy>)
   notes.py ref FILE                                file reference for the Drive connector's create_file (no bytes through chat)
@@ -186,6 +187,26 @@ def cmd_restore(a):
     print(json.dumps({"dir": d, "rev": cap.get("rev", 1), "words": len(data["words"])}))
 
 
+def cmd_retime(a):
+    """Captions made before the timing check (Nov 23, 2026) can drift by up to ~20 s around long pauses. Re-time them in place:
+    same words, same order, same rev, so the studio's edits and pending corrections keep their word indices."""
+    cmd_restore(a)
+    cap = json.load(open(a.captions))
+    d = os.path.join(WORK, cap["audioId"])
+    old = cap["data"]["words"]
+    sh(sys.executable, VC, "retime", d)
+    data = json.load(open(f"{d}/data.json"))
+    if len(data["words"]) != len(old):
+        sys.exit(f"retime changed the word count ({len(old)} -> {len(data['words'])}); captions left as they were")
+    shifts = sorted(abs(n["s"] - o["s"]) for n, o in zip(data["words"], old))
+    meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
+    meta["retimedAt"] = int(time.time() * 1000)
+    write_captions(d, meta, data)
+    print(json.dumps({"dir": d, "words": len(old), "moved_over_1s": sum(1 for x in shifts if x > 1), "max_shift_s": round(shifts[-1], 1),
+                      "captions_ref": ref(f"{d}/captions.json"), "description": describe(meta),
+                      "next": "upload captions.json to Captions as <id>.captions.json, set its description, trash the old file"}, indent=1))
+
+
 def cmd_set(a):
     cap = json.load(open(f"{a.dir}/captions.json"))
     meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
@@ -208,6 +229,7 @@ def main():
     f = sp.add_parser("ref"); f.add_argument("file")
     rs = sp.add_parser("restore"); rs.add_argument("audio"); rs.add_argument("captions")
     st = sp.add_parser("set"); st.add_argument("dir"); st.add_argument("pairs", nargs="+")
+    rt = sp.add_parser("retime"); rt.add_argument("audio"); rt.add_argument("captions")
     a = ap.parse_args()
     if a.cmd == "setup":
         sh(sys.executable, VC, "setup")
@@ -223,6 +245,8 @@ def main():
         cmd_restore(a)
     elif a.cmd == "set":
         cmd_set(a)
+    elif a.cmd == "retime":
+        cmd_retime(a)
     elif a.cmd == "ref":
         print(ref(a.file))
 

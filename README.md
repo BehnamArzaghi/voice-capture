@@ -36,5 +36,10 @@ The Library needs read access to Drive files the app didn't create (`drive.reado
 ## Processing tools
 `tools/notes.py` runs the local steps of processing (transcription with forced alignment, captions, listening copy for Notion, applying corrections, rendering); `tools/vc.py` is the caption engine's Python side and shares `engine.js` with the studio.
 
+Caption timing is checked against a second, silence-skipping transcription pass: on long recordings with pauses, a single whole-recording pass can slide its timestamps by up to ~20 s. `notes.py retime AUDIO CAPTIONS.json` repairs captions made before this check (Nov 23, 2026) without changing their words, so studio edits still fit.
+
+## Desktop
+On screens 1000 px and wider the studio uses two columns (stage and player on the left, the Look / Voice / Motion / Words panels on the right) and the Library shows recordings in a grid. In the Words tab the transcript follows the playing word until you scroll it yourself; a button brings you back.
+
 ## Limits
 Web apps on iPhone can't record with the screen locked, so the app keeps the screen awake while recording. Uploads happen while the app is open.
