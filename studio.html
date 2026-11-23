@@ -198,6 +198,9 @@
     <h2>Types out by</h2><div class="seg" id="unit"></div>
     <h2>Entrance</h2><div class="row" id="entrance"></div>
     <h2>Once typed</h2><div class="seg" id="after"></div>
+    <h2>Live energy</h2><p class="muted" style="margin:-2px 0 10px">How the words already on screen keep answering your voice. Pick a direction, then tune it.</p>
+    <div class="row" id="directions"></div><p class="muted" id="dirNote" style="margin:10px 0 0;min-height:18px"></p>
+    <div id="live-sliders" style="margin-top:4px"></div>
     <div id="motion-sliders" style="margin-top:12px"></div>
   </section>
   <section class="panel" id="p-words">
@@ -265,9 +268,23 @@ const SL = {
     ["stretch", "Open long sounds", "Drawn-out words breathe wider", 0, 2, 0.05], ["attack", "Consonant snap", "Hard consonants pop as they land", 0, 1.5, 0.05],
     ["emphasis", "Emphasis", "How readily stressed words turn bold", 0, 1, 0.05], ["trace", "Melody line", "A thin line drawing each phrase's tune", 0, 1, 0.05]],
   "meaning-sliders": [["semantic", "Color by theme", "Key ideas take their theme's color", 0, 1, 0.05], ["recede", "Quiet the little words", "Articles and connectors fade to neutral", 0, 1, 0.05]],
+  "live-sliders": [["linger", "Linger", "How long letters keep moving with your voice after they're spoken. Full: until the phrase leaves (with Live)", 0, 1, 0.05],
+    ["ripple", "Ripple", "Each sound travels back through the words already on screen", 0, 1, 0.05],
+    ["sway", "Sway", "Typed letters keep riding the melody as you speak", 0, 1, 0.05],
+    ["shimmer", "Shimmer", "Letters tremble with the energy of your voice", 0, 1, 0.05],
+    ["glow", "Glow", "Loud moments flush the letters toward the accent color", 0, 1, 0.05]],
   "motion-sliders": [["enterMs", "Entrance time", "For fade, rise, scale and blur", 0, 1200, 10], ["ghost", "Show upcoming text", "0 = appears only when spoken", 0, 0.6, 0.01],
     ["pauseBreak", "Pause that starts a new phrase", "Seconds of silence", 0.2, 2.5, 0.05], ["hold", "Linger after a phrase", "Seconds", 0, 3, 0.1]],
 };
+// starting points for live energy; each sets all five dimensions (and Once typed: Live)
+const DIRECTIONS = [
+  { name: "Still", v: { linger: 0, ripple: 0, sway: 0, shimmer: 0, glow: 0 }, note: "Letters answer the voice only as they are spoken, then settle (the original Live)." },
+  { name: "Echo", v: { linger: 0.45, ripple: 0.8, sway: 0, shimmer: 0, glow: 0.15 }, note: "Each stress rolls back through the phrase like an echo." },
+  { name: "Tide", v: { linger: 1, ripple: 0.3, sway: 0.85, shimmer: 0, glow: 0 }, note: "The whole phrase rises and falls with the melody of your voice." },
+  { name: "Ember", v: { linger: 0.7, ripple: 0.35, sway: 0, shimmer: 0.2, glow: 0.85 }, note: "Loud moments burn into the accent color and cool as you go on." },
+  { name: "Charge", v: { linger: 0.5, ripple: 0.2, sway: 0.1, shimmer: 0.8, glow: 0.3 }, note: "Letters crackle with the energy of the voice." },
+  { name: "Chorus", v: { linger: 1, ripple: 0.65, sway: 0.5, shimmer: 0.15, glow: 0.45 }, note: "Everything on screen sings along." },
+];
 function slider(host, [key, label, help, a, b, step]) {
   const d = document.createElement("div"); d.className = "slider";
   d.innerHTML = `<div class="top2"><label for="s-${key}">${label}</label><span class="val" id="v-${key}"></span></div>${help ? `<div class="help">${help}</div>` : ""}<input id="s-${key}" type="range" min="${a}" max="${b}" step="${step}">`;
@@ -300,6 +317,10 @@ function build() {
   seg($("unit"), "unit", [["letter", "Letter"], ["syllable", "Syllable"], ["word", "Word"]]);
   seg($("after"), "after", [["live", "Live"], ["settle", "Settle"], ["breathe", "Breathe"]]);
   seg($("fillers"), "fillers", [["hide", "Hidden"], ["show", "Shown"]]);
+  DIRECTIONS.forEach((d) => {
+    const b = document.createElement("button"); b.className = "chip"; b.textContent = d.name; b.dataset.dir = d.name;
+    b.onclick = () => setP(Object.assign({ after: "live" }, d.v)); $("directions").appendChild(b);
+  });
   [["instant", "Instant"], ["fade", "Fade"], ["rise", "Rise"], ["scale", "Grow"], ["blur", "Focus"]].forEach(([v, l]) => {
     const b = document.createElement("button"); b.className = "chip"; b.textContent = l; b.dataset.v = v; b.onclick = () => setP({ entrance: v }); $("entrance").appendChild(b);
   });
@@ -315,6 +336,9 @@ function syncUI() {
     $("v-" + key).textContent = step >= 1 ? String(Math.round(P[key])) : (+P[key]).toFixed(2);
   }
   const on = (host, v) => document.querySelectorAll(`#${host} [data-v]`).forEach((b) => b.classList.toggle("on", b.dataset.v === String(v)));
+  const dir = DIRECTIONS.find((d) => P.after === "live" && Object.entries(d.v).every(([k, v]) => Math.abs((+P[k] || 0) - v) < 0.001));
+  document.querySelectorAll("#directions [data-dir]").forEach((b) => b.classList.toggle("on", !!dir && b.dataset.dir === dir.name));
+  $("dirNote").textContent = dir ? dir.note : ["linger", "ripple", "sway", "shimmer", "glow"].some((k) => +P[k] > 0) ? "Your own mix." : "";
   on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers);
   $("flHelp").textContent = P.fillers === "show" ? "Shown in the quiet color, timed to the moment they are spoken." : "Left out of the captions; the words close up and the typing pauses while they are spoken.";
   if (data && P.fillers !== shownFillers) renderWords();

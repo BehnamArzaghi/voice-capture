@@ -27,6 +27,8 @@
     semantic: 1, recede: 0.85, emphasis: 0.45,
     weightAmt: 0.8, sizeAmt: 0.25, lift: 0.5, tilt: 0.25, stretch: 0.4, attack: 0.5, trace: 0,
     unit: "letter", entrance: "instant", enterMs: 220, after: "live", ghost: 0, pauseBreak: 0.7, hold: 1.0,
+    // live energy (0 = off): how typed letters keep answering the voice after they land
+    linger: 0, ripple: 0, sway: 0, shimmer: 0, glow: 0,
     fillers: "hide", edits: {}, thEdits: {},
   };
   const PRESETS = {
@@ -137,7 +139,7 @@
       return Math.round(clamp(x, wmin, wmax) / 10) * 10;
     };
     const sOf = (a, w) => 1 + P.sizeAmt * (a - 0.55) * 0.6 + (w.emph ? 0.05 : 0) - (w.fn ? P.recede * 0.06 : 0);
-    const words = [];
+    const words = [], onsets = [];  // onsets: every letter's onset in order (running max), to find the letter being spoken
     // fillers (um, uh...) flagged in the data: hidden ones leave the layout entirely and neighbours take their cleaned text (wh)
     const hideF = P.fillers !== "show";
     let lastE = 0;
@@ -177,6 +179,7 @@
         return ch;
       });
       w.chars.forEach((c, k) => { c.end = k + 1 < w.chars.length ? Math.max(c.onset + 0.04, w.chars[k + 1].onset) : w.e; });
+      w.chars.forEach((c) => { c.gi = onsets.length; onsets.push(Math.max(c.onset, onsets.length ? onsets[onsets.length - 1] : 0)); });
       w.width = Math.max(0, x - sp);
       words.push(w);
     });
@@ -223,7 +226,7 @@
           const mean = sm.reduce((x, y) => x + y, 0) / n;
           w.chars.forEach((c, k) => { c.dy = -clamp(((mean - ref) + 0.6 * clamp(sm[k] - mean, -3, 3)) * pitchPx, -0.55 * S, 0.55 * S); });
         }
-        w.rot = clamp(P.tilt * w.slope * 0.5, -9, 9);
+        w.rot = clamp(P.tilt * w.slope * 0.5, -9, 9); w.ref = ref;
       });
     };
     const median = (arr) => { const a = arr.filter((v) => v != null).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
@@ -249,7 +252,7 @@
         ph.off = nx ? Math.min(ph.end + P.hold, Math.max(ph.end + 0.05, nx.start - 0.06)) : ph.end + P.hold + 1.5;
       });
     }
-    return { W, H, S, P, pal, tcol, neutral, themes, words, phrases, lines, env, box, pitchLH, placement, duration: data.duration };
+    return { W, H, S, P, pal, tcol, neutral, themes, words, phrases, lines, env, box, pitchLH, placement, duration: data.duration, onsets, cur: 0 };
   }
 
   // ---------- drawing
@@ -271,13 +274,34 @@
       if (P.after === "live") {
         const live = loudAt(scene.env, t), end = c.end + 0.1;
         if (t <= end) a = Math.max(live, c.a * 0.35);
-        else a = c.a + (Math.max(loudAt(scene.env, end), c.a * 0.35) - c.a) * (1 - ease((t - end) / 0.18));
+        else if (P.linger > 0) {  // linger: keep following the voice after the letter is spoken, fading out (or, at full, until the phrase leaves)
+          const span = P.linger >= 0.99 ? Infinity : 0.18 + P.linger * 4, k = span === Infinity ? 1 : 1 - ease((t - end) / span);
+          a = c.a + (Math.max(live, c.a * 0.35) - c.a) * k;
+        } else a = c.a + (Math.max(loudAt(scene.env, end), c.a * 0.35) - c.a) * (1 - ease((t - end) / 0.18));
       } else if (P.after === "breathe") a = c.a * 0.72 + loudAt(scene.env, t) * 0.4;
     }
     if (P.attack > 0 && (c.cls === "P" || c.cls === "F") && t >= ta) {
       const q = (t - ta) / 0.14; if (q < 1) sc *= 1 + P.attack * 0.22 * (1 - q) * (1 - q);
     }
-    return { alpha, dy, sc, blur, a };
+    // live energy: the voice travels back through letters already on screen as a wave (~22 letters a second, fading with distance)
+    let dx = 0, rot = 0, heat = 0;
+    if (t >= ta && (P.ripple > 0 || P.sway > 0 || P.shimmer > 0 || P.glow > 0)) {
+      const dist = Math.max(0, scene.cur - c.gi), delay = dist * 0.045, reach = Math.exp(-dist / 45), tw = t - delay;
+      const wave = loudAt(scene.env, tw);
+      if (P.ripple > 0) a += P.ripple * 1.2 * (wave - 0.35) * reach;
+      if (P.sway > 0 && w.ref != null) {  // sway: typed letters keep riding the current melody (last voiced pitch within 0.25 s)
+        let v = null; for (let q = 0; q < 6 && v == null; q++) v = pitchAt(scene.env, tw - q * 0.05);
+        if (v != null) dy -= P.sway * clamp(v - w.ref, -5, 5) * scene.S * 0.11 * (0.4 + 0.6 * reach);
+      }
+      if (P.shimmer > 0) {  // shimmer: a tremor whose size follows the energy of the voice
+        const e = P.shimmer * clamp(wave * 1.3 - 0.15, 0, 1) * (0.35 + 0.65 * reach), g = c.gi;
+        dx = e * scene.S * 0.055 * (Math.sin(t * 11.3 + g * 1.7) * 0.6 + Math.sin(t * 23.1 + g * 2.9) * 0.4);
+        dy += e * scene.S * 0.055 * (Math.sin(t * 13.7 + g * 2.3) * 0.6 + Math.sin(t * 19.9 + g * 0.7) * 0.4);
+        rot = e * 9 * Math.sin(t * 9.1 + g * 3.1);
+      }
+      if (P.glow > 0) heat = P.glow * clamp((wave - 0.45) / 0.35, 0, 1) * (0.25 + 0.75 * reach);
+    }
+    return { alpha, dy, dx, rot, sc, blur, a: clamp(a, 0, 1.3), heat };
   }
   function weightFor(a, w, scene) {
     const P = scene.P, [wmin, wmax] = (FONTS[P.font] || FONTS.Inter).w;
@@ -300,7 +324,10 @@
       const f = `${wt} ${size.toFixed(1)}px "${P.font}"`; if (f !== lastFont) { ctx.font = f; lastFont = f; }
       ctx.globalAlpha = st.alpha * fade;
       if (st.blur > 0.4 && typeof ctx.filter === "string") ctx.filter = `blur(${st.blur.toFixed(1)}px)`; else if (ctx.filter && ctx.filter !== "none") ctx.filter = "none";
-      ctx.fillText(c.c, w.x + c.x + c.cw / 2, y0 + w.base + c.dy + st.dy);
+      if (P.glow > 0) ctx.fillStyle = st.heat > 0.01 ? mix(w.color, scene.pal.accent, st.heat) : w.color;
+      const px = w.x + c.x + c.cw / 2 + st.dx, py = y0 + w.base + c.dy + st.dy;
+      if (Math.abs(st.rot) > 0.05) { ctx.save(); ctx.translate(px, py); ctx.rotate((st.rot * Math.PI) / 180); ctx.fillText(c.c, 0, 0); ctx.restore(); }
+      else ctx.fillText(c.c, px, py);
       drew = true;
     }
     ctx.restore();
@@ -322,6 +349,7 @@
   /* draw(ctx, scene, t): ctx already scaled so 1 unit = 1 output pixel. Returns hit boxes of visible words. */
   function draw(ctx, scene, t) {
     const { W, H, P, pal, S } = scene, boxes = [];
+    { const o = scene.onsets; let lo = 0, hi = o.length - 1, k = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (o[m] <= t) { k = m; lo = m + 1; } else hi = m - 1; } scene.cur = k; }
     ctx.save(); ctx.globalAlpha = 1; ctx.fillStyle = pal.bg; ctx.fillRect(0, 0, W, H);
     if (scene.placement === "page") {
       const L = scene.lines, k = findLast(L, t, "start");
