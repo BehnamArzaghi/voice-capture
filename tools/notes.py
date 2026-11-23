@@ -98,6 +98,8 @@ def cmd_prepare(a):
            "captions_ref": ref(f"{d}/captions.json"), "captions_bytes": os.path.getsize(f"{d}/captions.json"),
            "listen_ref": ref(f"{d}/listen.m4a"), "listen_bytes": os.path.getsize(f"{d}/listen.m4a"), "listen_fits_notion": fits,
            "description": describe(meta)}
+    if os.path.exists(f"{d}/timing_report.json"):
+        out["timing_check"] = json.load(open(f"{d}/timing_report.json"))  # "check": stretches (s) left unverified, worth a look in the studio
     print(json.dumps(out, indent=1))
 
 
@@ -202,7 +204,9 @@ def cmd_retime(a):
     meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
     meta["retimedAt"] = int(time.time() * 1000)
     write_captions(d, meta, data)
+    rep = json.load(open(f"{d}/timing_report.json")) if os.path.exists(f"{d}/timing_report.json") else {}
     print(json.dumps({"dir": d, "words": len(old), "moved_over_1s": sum(1 for x in shifts if x > 1), "max_shift_s": round(shifts[-1], 1),
+                      "timing_check": rep,
                       "captions_ref": ref(f"{d}/captions.json"), "description": describe(meta),
                       "next": "upload captions.json to Captions as <id>.captions.json, set its description, trash the old file"}, indent=1))
 

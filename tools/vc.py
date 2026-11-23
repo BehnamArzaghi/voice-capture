@@ -354,8 +354,9 @@ def transcribe(out, lang=None, prompt=None, quality="accurate"):
             log(f"transcribe {100*s.end/dur:5.1f}%  ({el/60:.1f} min elapsed, ~{el*(dur/max(s.end,1)-1)/60:.1f} min left)")
     log(f"transcribed {len(words)} words, language={info.language}, {(time.time()-t0)/60:.1f} min")
     if quality != "fast":  # the whole-recording pass can slide its timestamps across long pauses; pin them to a pass that skips silence
-        words, moved = reanchor(words, anchor_pass(audio, info.language, model))
-        log(f"timing check: {moved} words moved back onto their speech")
+        prop, moved = reanchor(words, anchor_pass(audio, info.language, model))
+        words, rep = arbitrate(words, prop, moved, audio, model, info.language)
+        json.dump(rep, open(f"{out}/timing_report.json", "w"))
     json.dump({"duration": dur, "lang": info.language, "words": words}, open(f"{out}/words.json", "w"))
     shutil.copy(f"{out}/words.json", f"{out}/words.whisper.json")  # anchors for later fixes
 
@@ -423,7 +424,136 @@ def reanchor(words, ref, tol=0.8):
     for q in range(1, n):  # keep order
         if out[q]["s"] < out[q - 1]["s"]:
             out[q]["s"] = out[q - 1]["s"]; out[q]["e"] = max(out[q]["e"], out[q]["s"] + 0.03)
-    return out, len(moved)
+    return out, moved
+
+
+VOICED_RATE_MAX = 7.0  # words per second: faster than this is not speech, it is a timing error
+
+
+def _voiced(x):
+    fr = x[: len(x) // HOP * HOP].reshape(-1, HOP)
+    db = 20 * np.log10(np.sqrt((fr ** 2).mean(1)) + 1e-9)
+    return db > np.percentile(db, 15) + 8  # per 10 ms frame
+
+
+def _acoustic_fit(x, toks, t0, t1, dec):
+    """Mean acoustic score per frame when TOKS are forced onto x[t0:t1] (higher = the words fit the sound better), or None."""
+    words = []
+    for t in toks:
+        for dw in _dict_words(t):
+            if not dec.lookup_word(dw):
+                dec.add_word(dw, _g2p(dw), True)
+            words.append(dw)
+    if not words or t1 - t0 < 0.3:
+        return None
+    pcm = (np.clip(x[max(0, int(t0 * SR)):int(t1 * SR)], -1, 1) * 32767).astype(np.int16).tobytes()
+    try:
+        dec.set_align_text(" ".join(words))
+        dec.start_utt(); dec.process_raw(pcm, full_utt=True); dec.end_utt()
+        dec.set_alignment()
+        dec.start_utt(); dec.process_raw(pcm, full_utt=True); dec.end_utt()
+        ws = [a for a in dec.get_alignment() if not a.name.startswith(("<", "[", "+"))]
+    except Exception:
+        return None
+    fr = sum(a.duration for a in ws)
+    return sum(a.score for a in ws) / fr if len(ws) == len(words) and fr else None
+
+
+def arbitrate(words, prop, moved, x, model, lang=None, tol=0.8):
+    """Decide, stretch by stretch, whether the timing pass's proposal (PROP) or the original timing (WORDS) is right.
+    Cheapest evidence first: (1) physical rules, (2) a fresh transcription of just that window, (3) the forced aligner's
+    acoustic fit at both positions. When nothing is confident the original stays and the stretch is reported for a check."""
+    n = len(words); out = [dict(w) for w in words]
+    idx = sorted(i for i in moved if abs(prop[i]["s"] - words[i]["s"]) > 0.05)
+    runs, cur = [], []
+    for i in idx:  # stretches: moved words with at most 2 unmoved words between them
+        if cur and i - cur[-1] > 3:
+            runs.append(cur); cur = []
+        cur.append(i)
+    if cur: runs.append(cur)
+    runs = [r[c:c + 25] for r in runs for c in range(0, len(r), 25)]  # long stretches are judged in pieces of up to 25 words
+    act = _voiced(x); dur = len(x) / SR
+    vfrac = lambda a, b: float(act[int(a * 100):max(int(a * 100) + 1, int(b * 100))].mean()) if b > a else 0.0
+    rep = {"stretches": 0, "rule": 0, "listen": 0, "aligner": 0, "small": 0, "kept": 0, "check": []}
+    dec = None
+    for r in runs:
+        i, j = r[0], r[-1] + 1
+        shift = max(abs(prop[k]["s"] - words[k]["s"]) for k in range(i, j))
+        if shift <= tol:  # small refinements need no proof
+            for k in range(i, j): out[k] = dict(prop[k])
+            rep["small"] += 1; continue
+        rep["stretches"] += 1
+        m = j - i
+        os_, oe, ps, pe = words[i]["s"], words[j - 1]["e"], prop[i]["s"], prop[j - 1]["e"]
+        orate, prate = m / max(oe - os_, 0.05), m / max(pe - ps, 0.05)
+        verdict, how, times = None, None, None
+        # (1) rules: impossible speech rates, words placed in silence, a proposal with stacked (zero-length) words
+        stacked = sum(1 for k in range(i, j) if prop[k]["e"] - prop[k]["s"] < 0.03) >= 0.5 * m
+        if m >= 4 and prate > VOICED_RATE_MAX and orate <= VOICED_RATE_MAX: verdict = "orig"
+        elif m >= 4 and orate > VOICED_RATE_MAX and prate <= VOICED_RATE_MAX: verdict = "prop"
+        elif stacked: verdict = "orig"
+        else:
+            vo, vp = vfrac(os_, oe), vfrac(ps, pe)
+            if vp < 0.2 and vo > 0.5: verdict = "orig"
+            elif vo < 0.2 and vp > 0.5: verdict = "prop"
+        if verdict: how = "rule"
+        # (2) listen again: transcribe only this window (short, so it can neither drift nor skip a pause)
+        if not verdict:
+            w0, w1 = max(0.0, min(os_, ps) - 2), min(dur, max(oe, pe) + 2)
+            if w1 - w0 <= 60:
+                segs, _ = model.transcribe(x[int(w0 * SR):int(w1 * SR)], language=lang, beam_size=5, word_timestamps=True,
+                                           condition_on_previous_text=False, vad_filter=False)
+                loc = [{"w": w.word, "s": w0 + w.start, "e": w0 + w.end} for sg in segs for w in (sg.words or [])]
+                sm = difflib.SequenceMatcher(a=[_norm(words[k]["w"]) for k in range(i, j)], b=[_norm(w["w"]) for w in loc], autojunk=False)
+                pairs = [(i + a + q, b + q) for a, b, size in sm.get_matching_blocks() for q in range(size)]
+                if len(pairs) >= max(3, 0.3 * m):
+                    do = sorted(abs(loc[b]["s"] - words[k]["s"]) for k, b in pairs)[len(pairs) // 2]
+                    dp = sorted(abs(loc[b]["s"] - prop[k]["s"]) for k, b in pairs)[len(pairs) // 2]
+                    if dp < 1.0 and do > max(2.0, 2 * dp): verdict, how = "prop", "listen"
+                    elif do < 1.0 and dp > max(2.0, 2 * do): verdict, how = "orig", "listen"
+                    if verdict == "prop":  # use the fresh pass's times; spread words it lacks between their neighbours
+                        times = {k: (loc[b]["s"], loc[b]["e"]) for k, b in pairs}
+        # (3) tie-breaker: how well do these exact words fit the sound at each position (equal-length windows)?
+        if not verdict:
+            if dec is None:
+                from pocketsphinx import Decoder
+                dec = Decoder(samprate=SR, bestpath=False, loglevel="FATAL", beam=1e-100, wbeam=1e-80, pbeam=1e-100)
+            L = max(oe - os_, pe - ps) + 1.5
+            toks = [words[k]["w"].strip() for k in range(i, j)]
+            fo, fp = _acoustic_fit(x, toks, os_ - 0.75, os_ - 0.75 + L, dec), _acoustic_fit(x, toks, ps - 0.75, ps - 0.75 + L, dec)
+            if fo is not None and fp is not None:
+                if fp > fo and fo / fp > 1.4: verdict, how = "prop", "aligner"
+                elif fo > fp and fp / fo > 1.4: verdict, how = "orig", "aligner"
+        if verdict == "prop":
+            if times:
+                known = sorted(times)
+                for k in range(i, j):
+                    if k in times: out[k]["s"], out[k]["e"] = round(times[k][0], 3), round(times[k][1], 3)
+                lo = out[i - 1]["e"] if i > 0 else 0.0
+                k = i
+                while k < j:
+                    if k in times: k += 1; continue
+                    q = k
+                    while q < j and q not in times: q += 1
+                    a = out[k - 1]["e"] if k > i or i > 0 else lo
+                    b = out[q]["s"] if q < n and (q in times or q >= j) else a + 0.3 * (q - k)
+                    if b < a + 0.05 * (q - k): b = a + 0.05 * (q - k)
+                    st = (b - a) / (q - k)
+                    for z in range(k, q): out[z]["s"], out[z]["e"] = round(a + st * (z - k), 3), round(a + st * (z - k + 1), 3)
+                    k = q
+            else:
+                for k in range(i, j): out[k] = dict(prop[k])
+            rep[how] += 1
+        else:
+            if verdict == "orig": rep[how] += 1
+            else:
+                rep["kept"] += 1; rep["check"].append([round(os_, 1), round(oe, 1)])
+    for q in range(1, n):  # keep order
+        if out[q]["s"] < out[q - 1]["s"]:
+            out[q]["s"] = out[q - 1]["s"]; out[q]["e"] = max(out[q]["e"], out[q]["s"] + 0.03)
+    log(f"timing check: {rep['stretches']} disputed stretches — settled by rules {rep['rule']}, by a fresh listen {rep['listen']}, "
+        f"by the aligner {rep['aligner']}; {rep['kept']} left as they were for a check" + (f" at {rep['check']}" if rep["check"] else ""))
+    return out, rep
 
 
 def retime(out):
@@ -436,8 +566,12 @@ def retime(out):
         themes = json.load(open(f"{out}/data.json")).get("themes")
     toks = [w["w"].strip() for w in J["words"]]
     base = [{"w": w["w"], "s": w["s"], "e": w["e"], "p": w.get("p", 1)} for w in J["words"]]
-    anchored, moved = reanchor(base, anchor_pass(load16(out), J.get("lang")))
-    log(f"timing check: {moved} of {len(base)} words moved back onto their speech")
+    from faster_whisper import WhisperModel
+    model = WhisperModel(MODEL_DIR, device="cpu", compute_type="int8", cpu_threads=os.cpu_count() or 2)
+    x = load16(out)
+    prop, moved = reanchor(base, anchor_pass(x, J.get("lang"), model))
+    anchored, rep = arbitrate(base, prop, moved, x, model, J.get("lang"))
+    json.dump(rep, open(f"{out}/timing_report.json", "w"))
     json.dump(dict(J, words=anchored), open(f"{out}/words.whisper.json", "w"))
     clean = open(f"{out}/clean.txt").read() if os.path.exists(f"{out}/clean.txt") else None
     fix(out, " ".join(toks), clean)
@@ -449,7 +583,7 @@ def retime(out):
             if "th" in k: w["fn"] = False
         if themes: D["themes"] = themes
         json.dump(D, open(f"{out}/data.json", "w"), separators=(",", ":"))
-    return moved
+    return rep
 
 
 # ---------------------------------------------------------------- prosody
