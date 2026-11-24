@@ -165,6 +165,17 @@
   .words span.insel { background:#E1EAF3; }
   .sheet { max-height:84vh; overflow:auto; }
   .sheet.on ~ .toast { bottom:auto; top:calc(14px + env(safe-area-inset-top)); }  /* keep messages clear of an open sheet */
+  /* Thumbnail tab: the stage shows the still image; the transport gives way to a size line; the footer saves the image */
+  .thumbinfo { display:none; font:500 12px/1.4 "Inter"; color:var(--ink2); text-align:center; padding:10px 0 0; }
+  body.thumb .thumbinfo { display:block; }
+  body.thumb .transport, body.thumb .hint, body.thumb .compare-tag { display:none !important; }
+  body.thumb #saveBtn, body.thumb #renderBtn, body:not(.thumb) #thumbDrive, body:not(.thumb) #thumbSave { display:none; }
+  textarea.ttext { width:100%; min-height:54px; resize:vertical; border-radius:12px; border:1px solid var(--line); background:var(--card); font:500 16px/1.35 "Inter"; padding:10px 12px; color:var(--ink); display:block; }
+  .tlabel { display:block; font:500 13px "Inter"; color:var(--ink2); margin:12px 0 6px; }
+  .tlabel:first-of-type { margin-top:0; }
+  .twords span.heard { text-decoration:underline; text-decoration-color:#CFC9BC; text-decoration-thickness:2px; text-underline-offset:6px; }
+  .preset .vid { font:600 10px/1 "Inter"; letter-spacing:.06em; text-transform:uppercase; margin-left:auto; opacity:.75; }
+  @media (max-width:420px) { nav.tabs { gap:0; padding-left:10px; padding-right:10px; } nav.tabs button { font-size:13px; letter-spacing:-.01em; } }
   @media (min-width:1000px) {
     .wrap { max-width:1440px; display:grid; grid-template-columns:minmax(0, 1.55fr) minmax(400px, 1fr); column-gap:0; padding:0 0 0 28px; }
     .left { display:flex; flex-direction:column; position:sticky; top:0; height:100vh; min-width:0; padding-right:28px; }
@@ -202,16 +213,19 @@
       <div class="scrub"><input id="seek" type="range" min="0" max="1000" value="0" aria-label="Position"></div>
       <span class="time" id="time">0:00 / 0:00</span>
     </div>
+    <div class="thumbinfo" id="thumbInfo"></div>
     <button class="grab" id="grab" aria-label="Video size: drag up to shrink, down to enlarge, or tap to cycle"></button>
   </div>
   <div class="footer" id="footer"><div class="in">
     <button class="btn" id="saveBtn">Save look</button>
     <button class="btn primary" id="renderBtn">Render video</button>
+    <button class="btn" id="thumbDrive">Save to Drive</button>
+    <button class="btn primary" id="thumbSave">Save image</button>
   </div></div>
  </div>
  <div class="right" id="right">
   <nav class="tabs" id="tabs">
-    <button data-t="look" class="on">Look</button><button data-t="voice">Voice</button><button data-t="motion">Motion</button><button data-t="words">Words</button>
+    <button data-t="look" class="on">Look</button><button data-t="voice">Voice</button><button data-t="motion">Motion</button><button data-t="words">Words</button><button data-t="thumb">Thumbnail</button>
   </nav>
   <section class="panel on" id="p-look">
     <h2>Looks</h2><div class="presets" id="presets"></div>
@@ -243,6 +257,24 @@
     <p class="muted" id="fixCount" style="margin-top:0"></p>
     <div class="words" id="words"></div>
   </section>
+  <section class="panel" id="p-thumb">
+    <h2>Text</h2>
+    <label class="tlabel" for="tTitle">Title</label><textarea class="ttext" id="tTitle" rows="2" autocomplete="off" spellcheck="true"></textarea>
+    <label class="tlabel" for="tSub">Subtitle</label><textarea class="ttext" id="tSub" rows="2" autocomplete="off" spellcheck="true"></textarea>
+    <p class="muted" style="margin:8px 0 0">A new line in the text starts a new line on the image. Long text shrinks to fit.</p>
+    <h2>Look</h2><div class="presets" id="tPresets"></div>
+    <h2>Color</h2><div class="swatches" id="tPalettes"></div>
+    <h2>Typeface</h2><div class="fonts" id="tFonts"></div>
+    <h2>Placement</h2><div class="seg" id="tPlacement"></div>
+    <h2>Format</h2><div class="seg" id="tAspect"></div>
+    <h2>Case</h2><div class="seg" id="tCase"></div>
+    <h2>Size</h2><div id="t-size"></div>
+    <div class="slider" style="border-bottom:0"><div class="top2"><label>Divider</label></div><div class="help">A short rule between title and subtitle</div><div class="seg" id="tRule" style="margin-top:8px"></div></div>
+    <h2>How your voice shapes the words</h2><p class="muted" id="tVoiceNote" style="margin:-2px 0 6px"></p><div id="t-voice"></div>
+    <h2>Meaning</h2><div id="t-meaning"></div>
+    <h2>Words</h2><p class="muted" style="margin:-2px 0 8px">Tap a word here or on the image to change its emphasis or theme. Underlined words are heard in the recording.</p>
+    <div class="words twords" id="tWords"></div>
+  </section>
  </div>
 </div>
 <button class="follow" id="follow" aria-label="Follow the playing word"><b id="followArrow">↓</b><span id="followText">Back to current word</span></button>
@@ -266,12 +298,17 @@ let P = VC.params(INITIAL), data = null, scene = null, plainScene = null, compar
 let hist = [], fut = [], looks = [];
 // Drive state: base = caption data from Claude; fixes = word corrections (index -> text, "" removes); data = base with fixes applied
 let base = null, CAP = null, rev = 1, fixes = {}, renderReq = null, studioId = null, editsId = null, looksId = null, ready = false;
+// thumbnail: TH = its text, look (the video's, or its own) and word edits; tscene = the still drawn on the stage while the tab is open
+let TH = null, tscene = null, tboxes = [], thumbOn = false, thumbFileId = null, hearUntil = 0;
 const PRESET_NOTES = { Typewriter: "Typed out as you speak; loud sounds land heavy.", Manuscript: "A page that fills like a notebook.",
   Poster: "Big, bold, left-set — for statements.", Score: "Letters ride the melody of the voice.", Ticker: "One line at a time, low on screen.", Plain: "Quiet and maximally readable." };
 
 // ---------- state & history
+const snap = () => JSON.stringify({ P, TH });
+function pushHist() { hist.push(snap()); if (hist.length > 80) hist.shift(); fut = []; }
+function restore(s) { const o = JSON.parse(s); if (o && o.P) { P = o.P; TH = o.TH; } else P = o; syncUI(); rebuild(); }
 function setP(patch, record = true) {
-  if (record) { hist.push(JSON.stringify(P)); if (hist.length > 80) hist.shift(); fut = []; }
+  if (record) pushHist();
   P = Object.assign({}, P, patch); syncUI(); rebuild();
 }
 const KEEP = ["edits", "thEdits", "thOff"];  // per-recording settings: kept when the look changes, never saved in a look
@@ -292,8 +329,8 @@ function recipe() {
   if ((P.thOff || []).length) d.thOff = P.thOff;
   return d;
 }
-$("undo").onclick = () => { if (!hist.length) return; fut.push(JSON.stringify(P)); P = JSON.parse(hist.pop()); syncUI(); rebuild(); };
-$("redo").onclick = () => { if (!fut.length) return; hist.push(JSON.stringify(P)); P = JSON.parse(fut.pop()); syncUI(); rebuild(); };
+$("undo").onclick = () => { if (!hist.length) return; fut.push(snap()); restore(hist.pop()); };
+$("redo").onclick = () => { if (!fut.length) return; hist.push(snap()); restore(fut.pop()); };
 
 // ---------- controls
 const SL = {
@@ -364,8 +401,11 @@ function build() {
   document.querySelectorAll("#tabs button").forEach((b) => (b.onclick = () => {
     document.querySelectorAll("#tabs button").forEach((x) => x.classList.toggle("on", x === b));
     document.querySelectorAll("section.panel").forEach((s) => s.classList.toggle("on", s.id === "p-" + b.dataset.t));
+    const was = thumbOn; thumbOn = b.dataset.t === "thumb"; document.body.classList.toggle("thumb", thumbOn);
+    if (thumbOn !== was) { if (thumbOn) { au.pause(); syncThumb(); renderThumbWords(); prepThumb(); } resize(); dirty = true; }
     if (b.dataset.t === "words") { follow = true; markWord(true); } else followBtn();
   }));
+  buildThumbUI();
 }
 function syncUI() {
   for (const list of Object.values(SL)) for (const [key, , , , , step] of list) {
@@ -381,7 +421,7 @@ function syncUI() {
   if (data && P.fillers !== shownFillers) renderWords();
   const edited = Object.keys(diff()).length > 1;
   document.querySelectorAll("#presets .preset:not(.saved)").forEach((b) => { b.querySelector("b").textContent = b.dataset.p + (b.dataset.p === P.preset && edited ? " · edited" : ""); });
-  markLooks();
+  markLooks(); syncThumb();
   $("undo").disabled = !hist.length; $("redo").disabled = !fut.length;
 }
 
@@ -391,9 +431,14 @@ const whenBuilt = (f) => onBuilt.push(f);  // run after the next scene rebuild (
 function rebuild() {
   clearTimeout(rt);
   rt = setTimeout(async () => {
-    try { await Promise.all([200, 400, 700, 900].map((w) => document.fonts.load(`${w} 40px "${P.font}"`))); } catch (e) {}
+    const fams = [P.font].concat(TH ? [VC.thumbParams(TH, P).P.font] : []);
+    try { await Promise.all(fams.flatMap((f) => [200, 400, 700, 900].map((w) => document.fonts.load(`${w} 40px "${f}"`)))); } catch (e) {}
     if (!data) return;
-    scene = VC.buildScene(data, P, measure); plainScene = null; resize(); drawThemes(); dirty = true;
+    scene = VC.buildScene(data, P, measure); plainScene = null;
+    if (TH) tscene = VC.buildThumb(data, TH, P, measure);
+    resize(); drawThemes(); dirty = true;
+    if (thumbOn) { renderThumbWords(); prepThumb(); }
+    thumbNote();
     const cbs = onBuilt; onBuilt = []; cbs.forEach((f) => f());
     try { localStorage.setItem("vc2-params", JSON.stringify(recipe())); } catch (e) {}
     if (ready) saveEdits();
@@ -404,11 +449,11 @@ let stageScale = 1;
 try { stageScale = Math.min(1, Math.max(0.3, +localStorage.getItem("vc2-stage") || 1)); } catch (e) {}
 const DESK = window.matchMedia("(min-width:1000px)");
 function stageBox(scale) {
-  const r = scene.W / scene.H, top = document.querySelector(".top");
+  const sc = thumbOn && tscene ? tscene : scene, r = sc.W / sc.H, top = document.querySelector(".top");
   let w, maxH;
   if (DESK.matches) {  // left column: the stage takes the room the header, transport and buttons leave
     w = top.clientWidth;
-    maxH = window.innerHeight - document.querySelector("header").offsetHeight - document.querySelector(".transport").offsetHeight
+    maxH = window.innerHeight - document.querySelector("header").offsetHeight - (thumbOn ? $("thumbInfo").offsetHeight : document.querySelector(".transport").offsetHeight)
       - $("grab").offsetHeight - $("footer").offsetHeight - 16;
   } else { w = Math.min(top.clientWidth - 32, 728); maxH = window.innerHeight * 0.48; }
   let cw = w, ch = w / r; if (ch > maxH) { ch = maxH; cw = ch * r; }
@@ -442,7 +487,10 @@ function resize(cssOnly) {
   g.addEventListener("pointerup", end); g.addEventListener("pointercancel", end);
 })();
 function frame() {
-  if (scene && (!au.paused || dirty)) {
+  if (thumbOn && tscene) {
+    if (dirty) { const k = cv.width / tscene.W; ctx.setTransform(k, 0, 0, k, 0, 0); tboxes = VC.drawThumb(ctx, tscene); dirty = false; }
+    if (hearUntil && au.currentTime >= hearUntil) { au.pause(); hearUntil = 0; }
+  } else if (scene && (!au.paused || dirty)) {
     let sc = scene;
     if (compare) { if (!plainScene) plainScene = VC.buildScene(data, { preset: "Plain", aspect: P.aspect }, measure); sc = plainScene; }
     const k = cv.width / sc.W; ctx.setTransform(k, 0, 0, k, 0, 0);
@@ -574,9 +622,16 @@ $("seek").addEventListener("input", () => { seeking = true; follow = true; if (a
 $("seek").addEventListener("change", () => (seeking = false));
 // stage: tap = play/pause or word, hold = compare with Plain
 let holdT = null, held = false;
-$("stage").addEventListener("pointerdown", (e) => { held = false; holdT = setTimeout(() => { held = true; compare = true; $("ctag").style.display = "block"; dirty = true; }, 350); });
+$("stage").addEventListener("pointerdown", (e) => { held = false; if (thumbOn) return; holdT = setTimeout(() => { held = true; compare = true; $("ctag").style.display = "block"; dirty = true; }, 350); });
 const endHold = (e) => {
   clearTimeout(holdT);
+  if (thumbOn) {
+    if (e.type !== "pointerup" || !tscene) return;
+    const r = cv.getBoundingClientRect(), x = ((e.clientX - r.left) / r.width) * tscene.W, y = ((e.clientY - r.top) / r.height) * tscene.H;
+    const hit = tboxes.find((b) => x >= b.x - 6 && x <= b.x + b.w + 6 && y >= b.y && y <= b.y + b.h);
+    if (hit) openThumbWord(hit.i);
+    return;
+  }
   if (held) { compare = false; $("ctag").style.display = "none"; dirty = true; return; }
   if (e.type !== "pointerup") return;
   const r = cv.getBoundingClientRect(), x = ((e.clientX - r.left) / r.width) * scene.W, y = ((e.clientY - r.top) / r.height) * scene.H;
@@ -763,6 +818,176 @@ function openWord(i, a, b) {
   $("closeS").onclick = sheetClose;
 }
 
+// ---------- thumbnail: a still title card with the same looks, voice mapping and themes as the captions.
+// It follows the video's look until a look control here changes it; then it keeps its own (TH.look). Saved in edits.json ("thumb").
+const TSCALE = 2;  // export at twice the video frame: 3840 × 2160 for 16:9
+const slSpec = (key) => Object.values(SL).flat().find((x) => x[0] === key);
+const TSL = {
+  "t-size": [["tSize", "Title size", "Long text shrinks to fit", 60, 320, 1, "T"], ["subRatio", "Subtitle size", "Relative to the title", 0.2, 0.8, 0.01, "T"],
+    slSpec("weight"), slSpec("width"), ["lineHeight", "Line spacing", "", 0.9, 2.2, 0.02], ["position", "Height on the image", "Centered and Left placements", 0.2, 0.8, 0.01]],
+  "t-voice": ["weightAmt", "sizeAmt", "lift", "tilt", "stretch", "emphasis"].map(slSpec)
+    .concat([["trace", "Melody line", "The divider draws the tune of the title as it was spoken", 0, 1, 0.05]]),
+  "t-meaning": [slSpec("semantic"), slSpec("recede")],
+};
+const tP = () => VC.thumbParams(TH, P).P;
+function setT(patch, look, record = true) {  // look: changes to the thumbnail's own look (it stops following the video's)
+  if (!TH) return;
+  if (record) pushHist();
+  TH = Object.assign({}, TH, patch || {});
+  if (look) { const cur = TH.follow ? diff() : Object.assign({}, TH.look); TH.follow = false; TH.look = Object.assign(cur, look); }
+  syncThumb(); rebuild();
+  $("undo").disabled = !hist.length; $("redo").disabled = !fut.length;
+}
+function tslider(host, [key, label, help, a, b, step, scope]) {
+  const d = document.createElement("div"); d.className = "slider";
+  d.innerHTML = `<div class="top2"><label for="ts-${key}">${label}</label><span class="val" id="tv-${key}"></span></div>${help ? `<div class="help">${help}</div>` : ""}<input id="ts-${key}" type="range" min="${a}" max="${b}" step="${step}">`;
+  host.appendChild(d);
+  const inp = d.querySelector("input"); let started = false;
+  inp.addEventListener("pointerdown", () => { started = false; });
+  inp.addEventListener("input", () => { if (scope === "T") setT({ [key]: +inp.value }, null, !started); else setT(null, { [key]: +inp.value }, !started); started = true; });
+}
+function buildThumbUI() {
+  for (const [host, list] of Object.entries(TSL)) list.forEach((x) => tslider($(host), x));
+  Object.entries(VC.PALETTES).forEach(([name, pal]) => {
+    const b = document.createElement("button"); b.className = "swatch"; b.dataset.v = name; b.style.background = pal.bg; b.style.color = pal.ink;
+    b.innerHTML = `${name}<i style="background:${VC.themeColors(pal, 1)[0]}"></i>`; b.onclick = () => setT(null, { palette: name }); $("tPalettes").appendChild(b);
+  });
+  Object.entries(VC.FONTS).forEach(([name, f]) => {
+    const b = document.createElement("button"); b.className = "font"; b.dataset.v = name;
+    b.innerHTML = `<span class="s" style="font-family:'${name}'">${name}</span><span class="l">${f.label}</span>`; b.onclick = () => setT(null, { font: name }); $("tFonts").appendChild(b);
+  });
+  const tseg = (host, opts, set) => opts.forEach(([v, l]) => { const b = document.createElement("button"); b.textContent = l; b.dataset.v = v; b.onclick = () => set(v); $(host).appendChild(b); });
+  tseg("tPlacement", [["block", "Centered"], ["page", "Left"], ["editorial", "Poster"], ["ticker", "Low"]], (v) => setT(null, { placement: v }));
+  tseg("tAspect", [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"], ["4:5", "4:5"]], (v) => setT(null, { aspect: v }));
+  tseg("tCase", [["as-is", "As typed"], ["lower", "lower"], ["upper", "UPPER"], ["title", "Title Case"]], (v) => setT(null, { textCase: v }));
+  tseg("tRule", [["1", "On"], ["0", "Off"]], (v) => setT({ rule: +v }));
+  [["tTitle", "title"], ["tSub", "subtitle"]].forEach(([id, key]) => {
+    const el = $(id); let started = false;
+    el.addEventListener("focus", () => { started = false; });
+    el.addEventListener("input", () => { setT({ [key]: el.value }, null, !started); started = true; });
+  });
+  drawThumbLooks();
+}
+const swatchHtml = (pp, label) => { const pal = VC.PALETTES[pp.palette] || VC.PALETTES.Blush;
+  return `<div class="sw" style="background:${pal.bg};color:${pal.ink};font-family:'${pp.font}';font-weight:${Math.min(700, pp.weight + 150)}">Aa <span style="color:${VC.themeColors(pal, 1)[0]};margin-left:6px">${label}</span></div>`; };
+function drawThumbLooks() {  // the video's look first, then the built-in looks and the saved ones
+  const host = $("tPresets"); if (!host) return; host.innerHTML = "";
+  const add = (key, pp, name, note, pick) => {
+    const b = document.createElement("button"); b.className = "preset"; b.dataset.tl = key;
+    b.innerHTML = `${swatchHtml(pp, "title")}<div class="meta"><b></b><span></span></div>`;
+    b.querySelector("b").textContent = name; b.querySelector(".meta span").textContent = note;
+    b.onclick = pick; host.appendChild(b);
+  };
+  add("video", VC.params(P), "Video's look", "Same look as the captions; follows changes made there", () => setT({ follow: true }));
+  Object.keys(VC.PRESETS).forEach((name) => add("p:" + name, VC.params({ preset: name }), name, PRESET_NOTES[name] || "", () => setT({ follow: false, look: { preset: name } })));
+  looks.forEach((L) => add("L:" + L.id, VC.params(L.params), L.name, "Saved look", () => setT({ follow: false, look: JSON.parse(JSON.stringify(L.params)) })));
+  syncThumb();
+}
+function syncThumb() {
+  if (!TH || !$("tPresets")) return;
+  const E = tP();
+  for (const list of Object.values(TSL)) for (const [key, , , , , step, scope] of list) {
+    const el = $("ts-" + key); if (!el) continue; const v = scope === "T" ? TH[key] : E[key];
+    el.value = v; $("tv-" + key).textContent = step >= 1 ? String(Math.round(v)) : (+v).toFixed(2);
+  }
+  const on = (host, v) => document.querySelectorAll(`#${host} [data-v]`).forEach((b) => b.classList.toggle("on", b.dataset.v === String(v)));
+  on("tPalettes", E.palette); on("tFonts", E.font); on("tPlacement", E.placement); on("tAspect", E.aspect); on("tCase", E.textCase); on("tRule", String(+TH.rule ? 1 : 0));
+  const vc = document.querySelector('#tPresets [data-tl="video"]');
+  if (vc) { vc.querySelector(".sw").outerHTML = swatchHtml(VC.params(P), "title"); }
+  const saved = TH.follow ? null : looks.find((L) => lookKey(L.params) === lookKey(TH.look || {}));
+  const edited = !TH.follow && !saved && Object.keys(TH.look || {}).length > 1;
+  const cur = TH.follow ? "video" : saved ? "L:" + saved.id : "p:" + ((TH.look || {}).preset || "Typewriter");
+  document.querySelectorAll("#tPresets .preset").forEach((b) => {
+    b.classList.toggle("on", b.dataset.tl === cur);
+    if (b.dataset.tl.startsWith("p:")) b.querySelector("b").textContent = b.dataset.tl.slice(2) + (b.dataset.tl === cur && edited ? " · edited" : "");
+  });
+  if (document.activeElement !== $("tTitle")) $("tTitle").value = TH.title || "";
+  if (document.activeElement !== $("tSub")) $("tSub").value = TH.subtitle || "";
+}
+function thumbNote() {
+  if (!tscene) return;
+  $("thumbInfo").textContent = `${tscene.W * TSCALE} × ${tscene.H * TSCALE} PNG · tap a word to edit it`;
+  const { heard, total } = tscene;
+  $("tVoiceNote").textContent = !total ? "" : heard
+    ? `${heard} of ${total} words are heard in this recording. The loudness and pitch of those moments shape their letters.`
+    : "None of these words are heard in this recording, so they keep the base weight. These settings act on words that are.";
+}
+function renderThumbWords() {
+  const host = $("tWords"); if (!host || !tscene) return; host.innerHTML = "";
+  tscene.words.forEach((w) => {
+    if (w.br && w.i > 0) host.appendChild(document.createElement("br"));
+    else if (w.i > 0 && w.part !== tscene.words[w.i - 1].part) { host.appendChild(document.createElement("br")); host.appendChild(document.createElement("br")); }
+    const s = document.createElement("span"), ed = TH.edits[w.key];
+    s.textContent = w.text; s.dataset.k = w.i;
+    s.className = (w.fn && !ed ? "fn " : "") + (ed ? "ed-" + ed + " " : "") + (w.src != null ? "heard" : "");
+    if (w.th != null) s.style.color = tscene.tcol[w.th % tscene.tcol.length];
+    s.onclick = () => openThumbWord(w.i); host.appendChild(s); host.appendChild(document.createTextNode(" "));
+  });
+}
+function openThumbWord(k) {
+  const w = tscene && tscene.words[k]; if (!w) return;
+  const ths = tscene.themes, ed = TH.edits[w.key] || "auto";
+  const te = VC.themeIndex(TH.thEdits[w.key], ths), cur = te !== undefined ? te : w.autoTh;
+  sheetOpen(`<div class="w">${escH(w.text)}</div>
+    <p class="muted" style="margin:-6px 0 4px">${w.src != null ? `Heard at ${fmt(w.at)}. The loudness and pitch of that moment shape its letters.` : "Not heard in this recording; it keeps the base weight."}</p>
+    <h2>Emphasis</h2><div class="seg" id="tedSeg">${[["auto", "Auto"], ["emph", "Emphasize"], ["normal", "Normal"], ["quiet", "Quieter"]].map(([v, l]) => `<button data-v="${v}" class="${ed === v ? "on" : ""}">${l}</button>`).join("")}</div>
+    <h2>Theme</h2><div class="row" id="tthRow"><button class="chip ${cur == null ? "on" : ""}" data-v="">None</button>${ths.map((nm, i) => `<button class="chip ${cur === i ? "on" : ""}" data-v="${escH(nm)}"><i class="dot" style="background:${tscene.tcol[i % tscene.tcol.length]}"></i>${escH(nm)}</button>`).join("")}</div>
+    <div class="row" style="margin-top:16px">${w.src != null ? `<button class="btn" id="tHear" style="flex:1">Hear it</button>` : ""}<button class="btn" id="tDone"${w.src == null ? ' style="flex:1"' : ""}>Done</button></div>`);
+  const again = () => whenBuilt(() => { const j = tscene.words.findIndex((x) => x.key === w.key); if (j >= 0 && $("sheet").classList.contains("on")) openThumbWord(j); });
+  document.querySelectorAll("#tedSeg button").forEach((x) => (x.onclick = () => {
+    const e = Object.assign({}, TH.edits); if (x.dataset.v === "auto") delete e[w.key]; else e[w.key] = x.dataset.v; setT({ edits: e }); again();
+  }));
+  document.querySelectorAll("#tthRow [data-v]").forEach((x) => (x.onclick = () => {
+    const e = Object.assign({}, TH.thEdits), auto = w.autoTh != null ? ths[w.autoTh] : "";
+    if (x.dataset.v === auto) delete e[w.key]; else e[w.key] = x.dataset.v; setT({ thEdits: e }); again();
+  }));
+  if ($("tHear")) $("tHear").onclick = () => { const d = data.words[w.src]; au.currentTime = Math.max(0, d.s - 0.35); hearUntil = d.e + 0.45; au.play().catch(() => {}); };
+  $("tDone").onclick = sheetClose;
+}
+// the image: drawn at full size off screen; kept ready after each change so the phone's share sheet opens straight away
+let tBlob = null, tBlobKey = "", tPrep = null;
+const thumbKey = () => JSON.stringify([TH, tP()]);
+function renderThumbBlob() {
+  const sc = tscene, c = document.createElement("canvas"); c.width = sc.W * TSCALE; c.height = sc.H * TSCALE;
+  const x = c.getContext("2d"); x.setTransform(TSCALE, 0, 0, TSCALE, 0, 0); VC.drawThumb(x, sc);
+  return new Promise((res) => c.toBlob(res, "image/png"));
+}
+function prepThumb() {
+  clearTimeout(tPrep); if (!tscene) return;
+  const key = thumbKey(); if (tBlob && key === tBlobKey) return;
+  tPrep = setTimeout(async () => { if (!thumbOn || !tscene) return; const b = await renderThumbBlob(); if (b && thumbKey() === key) { tBlob = b; tBlobKey = key; } }, 450);
+}
+const thumbName = () => (String((TH && TH.title) || (CAP && CAP.title) || "thumbnail").toLowerCase().normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+  .replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "thumbnail") + "-thumbnail.png";
+async function thumbFile() {
+  const key = thumbKey(), b = tBlob && tBlobKey === key ? tBlob : await renderThumbBlob();
+  tBlob = b; tBlobKey = key;
+  return new File([b], thumbName(), { type: "image/png" });
+}
+$("thumbSave").onclick = async () => {
+  if (!tscene) return;
+  const f = await thumbFile();
+  if (window.matchMedia("(pointer:coarse)").matches && navigator.canShare && navigator.canShare({ files: [f] })) {
+    try { await navigator.share({ files: [f] }); return; } catch (e) { if (e && e.name === "AbortError") return; }
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+  toast(`Saved ${f.name} (${tscene.W * TSCALE} × ${tscene.H * TSCALE})`);
+};
+$("thumbDrive").onclick = async () => {
+  if (!ready || !tscene) return;
+  state("Saving…");
+  try {
+    const f = await thumbFile();
+    const r = await D.saveBlob(studioId, AID + ".thumbnail.png", f, thumbFileId, JSON.stringify({ w: tscene.W * TSCALE, h: tscene.H * TSCALE, at: Date.now() }));
+    thumbFileId = r.id; await saveEdits(true);
+    toast(`Thumbnail saved to Drive: Voice Notes Inbox › Studio › ${AID}.thumbnail.png`, 4200);
+  } catch (e) {
+    state("Not saved");
+    toast(e instanceof D.AuthError ? "Google sign-in expired. Open the Library to sign in again." : "Couldn't save to Drive: " + e.message, 5200);
+  }
+};
+
 // ---------- looks, render requests (shared storage when available, this device otherwise)
 function toast(msg, ms = 2600, action) {
   const t = $("toast"); t.textContent = msg;
@@ -786,7 +1011,7 @@ function drawLooks() {
     b.querySelector(".more").onclick = (e) => { e.stopPropagation(); lookSheet(L); };
     $("presets").appendChild(b);
   });
-  markLooks();
+  markLooks(); drawThumbLooks();
 }
 function markLooks() {  // highlight the saved look in use (else the built-in one), and show it on the Save button
   const L = activeLook();
@@ -854,7 +1079,7 @@ function saveEdits(now) {
 async function flush() {
   if (saving) { again = true; return; }
   saving = true;
-  const doc = { v: 1, audioId: AID, base: rev, updatedAt: Date.now(), params: recipe(), fixes, render: renderReq, glossary: GL };
+  const doc = { v: 1, audioId: AID, base: rev, updatedAt: Date.now(), params: recipe(), fixes, render: renderReq, glossary: GL, thumb: TH };
   const summary = { base: rev, fixes: Object.keys(fixes).length, glossary: GL.length, renderAt: renderReq ? renderReq.at : 0, updatedAt: doc.updatedAt };
   try { const r = await D.saveJson(studioId, AID + ".edits.json", doc, editsId, JSON.stringify(summary)); editsId = r.id; state("Saved"); }
   catch (e) { state("Not saved"); toast(e instanceof D.AuthError ? "Google sign-in expired. Open the Library to sign in again; changes stay on this screen." : "Couldn't save to Drive: " + e.message, 5200); }
@@ -918,20 +1143,25 @@ async function boot() {
     // audio: Claude's small listening copy when there is one, else the original recording
     D.getBlob(CAP.listen || AID, "audio/mp4").then((b) => { au.src = URL.createObjectURL(b); }).catch((e) => toast("Couldn't load the audio: " + e.message, 5200));
     studioId = await D.ensureSub(inbox, "Studio", "The caption studio's saved looks, word corrections and render requests. Claude reads these.");
-    const [ef, lf] = await Promise.all([
+    const [ef, lf, tf] = await Promise.all([
       D.list(`'${studioId}' in parents and name = '${D.quote(AID + ".edits.json")}' and trashed = false`, "id,modifiedTime"),
-      D.list(`'${studioId}' in parents and name = 'looks.json' and trashed = false`, "id,modifiedTime")]);
+      D.list(`'${studioId}' in parents and name = 'looks.json' and trashed = false`, "id,modifiedTime"),
+      D.list(`'${studioId}' in parents and name = '${D.quote(AID + ".thumbnail.png")}' and trashed = false`, "id,modifiedTime")]);
+    if (tf.length) thumbFileId = tf[0].id;
+    TH = VC.thumbDefaults(CAP.title);
     if (lf.length) { looksId = lf[0].id; try { const L = await D.getJson(looksId); if (L && L.looks) { looks = L.looks; drawLooks(); } } catch (e) {} }
     let p = null;
     if (ef.length) {
       editsId = ef[0].id; const E = await D.getJson(editsId); p = E.params || null; renderReq = E.render || null; GL = Array.isArray(E.glossary) ? E.glossary : [];
+      if (E.thumb && typeof E.thumb === "object") TH = Object.assign(TH, E.thumb);
       // Claude applies glossary requests in Notion before it refreshes glossary.json, so requests older than that copy are done
       if (GLOSS && GLOSS.updatedAt) GL = GL.filter((g) => !(g.at <= GLOSS.updatedAt));
       if ((E.base || 1) >= rev) fixes = E.fixes || {};
       else if (p && CAP.remap && CAP.remap.from === (E.base || 1)) { p.edits = remapKeys(p.edits, CAP.remap.map); p.thEdits = remapKeys(p.thEdits, CAP.remap.map); }
     }
     if (!p) { try { p = JSON.parse(localStorage.getItem("vc2-params") || "null"); } catch (e) {} }
-    if (p) { P = VC.params(p); hist = []; fut = []; syncUI(); }
+    if (p) P = VC.params(p);
+    hist = []; fut = []; syncUI();
     applyFixes(); renderLabel(); rebuild(); whenBuilt(renderWords);
     ready = true; state(ef.length ? "Saved" : "");
   } catch (e) {
@@ -948,7 +1178,8 @@ document.fonts && document.fonts.addEventListener && document.fonts.addEventList
 requestAnimationFrame(frame);
 setTimeout(() => ($("hint").style.opacity = 0), 6000);
 boot();
-window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, get follow() { return follow; }, get GL() { return GL; }, get scene() { return scene; }, openWord, openTerm, flush };
+window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, get follow() { return follow; }, get GL() { return GL; }, get scene() { return scene; },
+  get TH() { return TH; }, get tscene() { return tscene; }, openWord, openTerm, openThumbWord, thumbFile, flush };
 </script>
 </body>
 </html>

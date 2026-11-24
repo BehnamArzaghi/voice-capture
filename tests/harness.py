@@ -40,7 +40,7 @@ async def drive(route):
     u, m = route.request.url, route.request.method
     if "fonts.g" in u: return await route.abort()
     if m != "GET":
-        SAVES.append(route.request.post_data or "")
+        SAVES.append((route.request.post_data_buffer or b"").decode("utf-8", "replace"))  # uploads may be binary (thumbnail PNG)
         return await route.fulfill(json={"id": "SAVED", "modifiedTime": "2026-01-01T00:00:00Z"})
     p = urlparse(u); q = parse_qs(p.query).get("q", [""])[0]
     files = lambda fs: route.fulfill(json={"files": fs})

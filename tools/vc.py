@@ -8,6 +8,7 @@
   vc.py player DIR [--params p.json]   build DIR/player/ (index.html, audio.mp4, data.json)
   vc.py render DIR [--params p.json] [--start S --dur D] [--out file.mp4]
   vc.py text DIR | vc.py srt DIR       plain transcript | captions.srt for YouTube
+  vc.py thumb DIR --spec s.json [--out f.png] [--data captions.json]   the studio's thumbnail as a PNG
 """
 import argparse, base64, difflib, hashlib, json, math, os, re, shutil, subprocess, sys, time
 import numpy as np
@@ -1133,11 +1134,27 @@ async function vcFrame(t) { VC.draw(ctx, scene, t); const b = await cv.convertTo
 """
 
 
-def _render_page(out):
+THUMB_JS = r"""
+async function vcThumb(data, TH, P, scale) {
+  const fams = Object.keys(VC.FONTS);
+  await Promise.all(fams.flatMap((f) => [100, 400, 700, 900].map((w) => document.fonts.load(`${w} 40px "${f}"`))));
+  const m = new OffscreenCanvas(8, 8).getContext("2d");
+  const meas = (t, fam, w, em) => { if (!t) return 0; m.font = `${w} ${em}px "${fam}"`; return m.measureText(t).width; };
+  const sc = VC.buildThumb(data, TH, P, meas);
+  const c = new OffscreenCanvas(Math.round(sc.W * scale), Math.round(sc.H * scale)), x = c.getContext("2d");
+  x.setTransform(scale, 0, 0, scale, 0, 0); VC.drawThumb(x, sc);
+  const b = await c.convertToBlob({ type: "image/png" }), u = new Uint8Array(await b.arrayBuffer());
+  let s = ""; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000));
+  return { png: btoa(s), W: c.width, H: c.height, heard: sc.heard, total: sc.total, font: sc.P.font, fontOk: document.fonts.check(`400 40px "${sc.P.font}"`) };
+}
+"""
+
+
+def _render_page(out, extra=""):
     faces = "\n".join(
         f'@font-face{{font-family:"{fam}";src:url("file://{os.path.join(FONT_DIR, os.path.basename(p))}");font-weight:100 1000;}}'
         for fam, p in FONT_FILES.items())
-    page = f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{faces}</style></head><body><script>{open(ENGINE).read()}</script><script>{RENDER_JS}</script></body></html>"
+    page = f"<!DOCTYPE html><html><head><meta charset='utf-8'><style>{faces}</style></head><body><script>{open(ENGINE).read()}</script><script>{RENDER_JS}{extra}</script></body></html>"
     path = f"{out}/render_page.html"; open(path, "w").write(page)
     return path
 
@@ -1157,6 +1174,29 @@ def _browser(fn):
             finally:
                 await b.close()
     return asyncio.run(go())
+
+
+def thumb(out, spec, dest=None, scale=2.0, data_path=None):
+    """The studio's thumbnail as a PNG. SPEC: {"thumb": edits.json "thumb", "params": the video look}; the same engine draws it."""
+    S = load_params(spec)
+    D = json.load(open(data_path or f"{out}/data.json"))
+    if "words" not in D and "data" in D:
+        D = D["data"]
+    dest = dest or f"{out}/thumbnail.png"
+    page = _render_page(out, THUMB_JS)
+
+    async def fn(pg, errors):
+        await pg.goto("file://" + page)
+        r = await pg.evaluate("([d,t,p,s]) => vcThumb(d,t,p,s)", [D, S.get("thumb") or {}, S.get("params") or {}, scale])
+        if errors:
+            raise RuntimeError("; ".join(errors[:3]))
+        return r
+    r = _browser(fn)
+    open(dest, "wb").write(base64.b64decode(r.pop("png")))
+    if not r.get("fontOk"):
+        log(f"warning: {r.get('font')} did not load; run setup")
+    log(f"wrote {dest}  {r['W']}x{r['H']}  {os.path.getsize(dest)/1e6:.2f} MB  ({r['heard']} of {r['total']} words heard in the recording)")
+    return dest
 
 
 def frames(out, params, times, prefix):
@@ -1244,6 +1284,8 @@ def main():
     v = sp.add_parser("render"); v.add_argument("dir"); v.add_argument("--params"); v.add_argument("--start", type=float, default=0)
     v.add_argument("--dur", type=float); v.add_argument("--out"); v.add_argument("--fps", type=int, default=30); v.add_argument("--abr", default="128k")
     fr = sp.add_parser("frames"); fr.add_argument("dir"); fr.add_argument("--params"); fr.add_argument("--times", required=True); fr.add_argument("--prefix", default="/tmp/vcframe")
+    th = sp.add_parser("thumb"); th.add_argument("dir"); th.add_argument("--spec", required=True, help='{"thumb": ..., "params": ...} or a file with it')
+    th.add_argument("--out"); th.add_argument("--scale", type=float, default=2.0); th.add_argument("--data", help="captions.json or data.json (default DIR/data.json)")
     pl = sp.add_parser("player"); pl.add_argument("dir"); pl.add_argument("--params"); pl.add_argument("--title", default="Voice captions")
     sp.add_parser("text").add_argument("dir"); sp.add_parser("srt").add_argument("dir")
     A = ap.parse_args()
@@ -1268,6 +1310,8 @@ def main():
         render(A.dir, A.params, A.start, A.dur, A.out, A.fps, A.abr)
     elif A.cmd == "frames":
         frames(A.dir, A.params, [float(x) for x in A.times.split(",")], A.prefix)
+    elif A.cmd == "thumb":
+        thumb(A.dir, A.spec, A.out, A.scale, A.data)
     elif A.cmd == "player":
         player(A.dir, A.params, A.title)
     elif A.cmd == "text":

@@ -464,6 +464,254 @@
     ctx.restore();
     return boxes;
   }
-  const api = { ASPECTS, FONTS, PALETTES, DEFAULTS, PRESETS, params, buildScene, draw, themeColors, themePalette, themeIndex, mix, contrast, clamp };
+  // ---------- thumbnail: a still title card drawn with the captions' palettes, typefaces, looks, voice mapping and theme colors.
+  // Words of the title that are heard in the recording borrow their letters' loudness and pitch from where they are spoken.
+  const FN_WORDS = new Set(`a an the and or but nor so yet for of in on at to from by with without within about into onto over under
+than then as if that this these those there here it its it's is are was were be been being am do does did done have has had having
+will would shall should can could may might must not no i me my mine myself you your yours yourself he him his she her hers we us our
+ours they them their theirs what which who whom whose when where why how all any some such very just also too really like um uh oh
+well kind sort lot gonna wanna i'm you're that's there's i've i'll i'd don't doesn't didn't isn't aren't wasn't weren't can't
+won't wouldn't couldn't shouldn't let's maybe actually even more most much many each every one own other another same okay yeah right
+you've you'd we're they're he's she's what's here's who's thing things something anything stuff get got go going know mean say said
+up out off down quite rather sometimes always never often because while though although whether either neither both`.split(/\s+/));
+  const SMALL = new Set("a an the and or but nor for of in on at to by as vs via with from into onto over".split(" "));
+  const THUMB_DEFAULTS = { title: "", subtitle: "", follow: true, look: {}, tSize: 200, subRatio: 0.42, rule: 1, edits: {}, thEdits: {} };
+  /* starting text from a recording title: the part before the first colon is the title, the rest the subtitle */
+  function thumbDefaults(title) {
+    const t = String(title || "").trim(), k = t.indexOf(":");
+    return Object.assign(JSON.parse(JSON.stringify(THUMB_DEFAULTS)), k > 0 ? { title: t.slice(0, k).trim(), subtitle: t.slice(k + 1).trim() } : { title: t });
+  }
+  /* the look a thumbnail uses: the video's (follow) or its own; edits and theme tags are the thumbnail's own, hidden themes the recording's */
+  function thumbParams(TH, videoP) {
+    const T = Object.assign({}, THUMB_DEFAULTS, TH || {});
+    const src = Object.assign({}, T.follow ? videoP || {} : T.look || {});
+    ["edits", "thEdits", "thOff", "cards"].forEach((k) => delete src[k]);
+    const P = params(src);
+    P.thOff = ((videoP && videoP.thOff) || []).slice(); P.edits = Object.assign({}, T.edits || {}); P.thEdits = Object.assign({}, T.thEdits || {});
+    return { P, T };
+  }
+  const tnorm = (s) => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[’‘]/g, "'")
+    .replace(/[^\p{L}\p{N}']/gu, "").replace(/^'+|'+$/g, "");
+  const tsame = (a, b) => a === b || a + "s" === b || b + "s" === a || a + "es" === b || b + "es" === a;
+  function caseOf(text, mode, first) {
+    if (mode === "lower") return text.toLowerCase();
+    if (mode === "upper") return text.toUpperCase();
+    if (mode === "title") {
+      const k = tnorm(text);
+      if (!first && SMALL.has(k)) return text.toLowerCase();
+      return text.replace(/\p{L}/u, (c) => c.toUpperCase());
+    }
+    return text;
+  }
+  /* where each thumbnail word is heard: longest runs of consecutive spoken words first, then single content words near them */
+  function voiceSource(data, toks) {
+    const idx = [], spoken = [];
+    (data.words || []).forEach((w, i) => { if (!w.fl && w.w && w.w.trim()) { idx.push(i); spoken.push(tnorm(w.w)); } });
+    const keys = toks.map((t) => tnorm(t.raw)), src = toks.map(() => null);
+    let near = -1;
+    for (const part of ["t", "s"]) {
+      const ks = toks.map((t, k) => k).filter((k) => toks[k].part === part);
+      let j = 0;
+      while (j < ks.length) {
+        let best = 0, at = -1;
+        for (let q = 0; q < spoken.length; q++) {
+          let n = 0; while (j + n < ks.length && q + n < spoken.length && keys[ks[j + n]] && tsame(keys[ks[j + n]], spoken[q + n])) n++;
+          if (n > best || (n === best && n > 0 && near >= 0 && Math.abs(q - near) < Math.abs(at - near))) { best = n; at = q; }
+        }
+        if (best >= 2) { for (let n = 0; n < best; n++) src[ks[j + n]] = idx[at + n]; near = at + best; j += best; continue; }
+        const k = ks[j];
+        if (best === 1 && !FN_WORDS.has(keys[k])) {  // a single content word: its mention closest to the words already matched
+          let pick = -1; spoken.forEach((s, q) => { if (tsame(keys[k], s) && (pick < 0 || (near >= 0 && Math.abs(q - near) < Math.abs(pick - near)))) pick = q; });
+          if (pick >= 0) { src[k] = idx[pick]; if (near < 0) near = pick; }
+        }
+        j++;
+      }
+    }
+    return src;
+  }
+  function buildThumb(data, TH, videoP, measure) {
+    const { P, T } = thumbParams(TH, videoP);
+    const [W, H] = ASPECTS[P.aspect] || ASPECTS["16:9"], u = Math.min(W, H) / 1080;
+    const F = FONTS[P.font] || FONTS.Inter, [wmin, wmax] = F.w;
+    const pal = PALETTES[P.palette] || PALETTES.Blush;
+    const themes = (data.themes || []).slice(), tcolors = (data.themeColors || []).slice();
+    Object.values(P.thEdits || {}).forEach((v) => { if (typeof v === "string" && v && !themes.includes(v)) { themes.push(v); tcolors.push(null); } });
+    const tcol = themePalette(pal, themes, tcolors), thOff = new Set(P.thOff || []);
+    let neutral = pal.ink;
+    for (let k = 0.05; k <= 0.75; k += 0.05) { const c = mix(pal.ink, pal.bg, k); if (contrast(c, pal.bg) >= 3.4) neutral = c; else break; }
+    const env = envelope(data);
+    const thr = P.emphasis > 0 ? 2.4 - 1.7 * P.emphasis : Infinity;
+    const vertical = H > W;
+    const box = vertical ? { x0: 60, x1: 888, y0: 288, y1: 1248 } : { x0: W * (1 - P.width) / 2, x1: W * (1 + P.width) / 2, y0: H * 0.08, y1: H * 0.92 };
+    if (vertical) { const cx = (box.x0 + box.x1) / 2, hw = ((box.x1 - box.x0) / 2) * clamp(P.width / 0.76, 0.6, 1); box.x0 = cx - hw; box.x1 = cx + hw; }
+    const maxW = box.x1 - box.x0, maxH = box.y1 - box.y0;
+    const align = P.placement === "block" ? P.align : "left";
+    // words of the title and subtitle; a new line in the text forces a line break
+    const toks = [];
+    for (const [part, txt] of [["t", T.title], ["s", T.subtitle]]) {
+      let first = true;
+      String(txt || "").split(/\n/).forEach((line, li) => line.split(/\s+/).filter(Boolean).forEach((raw, j) => { toks.push({ part, raw, br: li > 0 && j === 0, first }); first = false; }));
+    }
+    // a word's edits are kept under its text and occurrence ("myth#0"), so they stay with it when other words change
+    const seen = {};
+    toks.forEach((t) => { const n = tnorm(t.raw) || t.raw; t.key = n + "#" + (seen[n] = (seen[n] == null ? -1 : seen[n]) + 1); });
+    const src = voiceSource(data, toks);
+    // glossary terms (one or more words) give a theme to words not heard in the recording
+    const termTh = toks.map(() => undefined), keys = toks.map((t) => tnorm(t.raw));
+    (data.terms || []).filter((t) => t.st !== "r" && t.th != null).map((t) => ({ seq: String(t.t).split(/\s+/).map(tnorm).filter(Boolean), th: t.th }))
+      .sort((a, b) => b.seq.length - a.seq.length).forEach(({ seq, th }) => {
+        for (let k = 0; k + seq.length <= toks.length; k++) {
+          if (seq.every((s, q) => keys[k + q] && tsame(s, keys[k + q]) && toks[k + q].part === toks[k].part) && termTh.slice(k, k + seq.length).every((x) => x === undefined))
+            for (let q = 0; q < seq.length; q++) termTh[k + q] = th;
+        }
+      });
+    const wOf = (a, w) => {
+      let x = P.weight + P.weightAmt * (a - 0.55) * (wmax - wmin) * 1.1;
+      if (w.emph) x += 140; if (w.quiet) x -= 120; if (w.fn) x -= P.recede * 90;
+      return Math.round(clamp(x, wmin, wmax) / 10) * 10;
+    };
+    const sOf = (a, w) => 1 + P.sizeAmt * (a - 0.55) * 0.6 + (w.emph ? 0.05 : 0) - (w.fn ? P.recede * 0.06 : 0);
+    const words = toks.map((t, k) => {
+      const d = src[k] != null ? data.words[src[k]] : null, key = keys[k], ed = P.edits[t.key];
+      const isFn = d ? !!d.fn : FN_WORDS.has(key);
+      const w = { i: k, key: t.key, part: t.part, br: t.br, text: caseOf(t.raw, P.textCase, t.first), src: src[k], at: d ? d.s : null,
+        fn: isFn && ed !== "emph" && ed !== "normal", quiet: ed === "quiet",
+        emph: ed === "emph" || (ed !== "normal" && ed !== "quiet" && !isFn && !!d && (d.emph || 0) >= thr),
+        slope: d ? d.slope || 0 : 0, stretch: d ? d.stretch || 0 : 0, la: (d && d.la) || [], lp: (d && d.lp) || [] };
+      w.autoTh = d && d.th != null ? d.th : termTh[k] != null ? termTh[k] : null;
+      const te = themeIndex(P.thEdits[t.key], themes);
+      w.th = te !== undefined ? te : w.autoTh;
+      if (w.th != null) w.fn = false;
+      if (w.th != null && thOff.has(themes[w.th])) w.th = null;
+      let color = pal.ink;
+      if (w.th != null && P.semantic > 0) color = mix(pal.ink, tcol[w.th % tcol.length], P.semantic);
+      else if (w.emph && P.semantic <= 0) color = mix(pal.ink, pal.accent, 0.75);
+      if (w.fn || w.quiet) color = mix(color, neutral, P.recede || (w.quiet ? 0.8 : 0));
+      w.color = color;
+      return w;
+    });
+    // letters at a given title size (S) and subtitle size; the text shrinks until it fits the safe box
+    const shape = (St, Ss) => {
+      for (const w of words) {
+        const S = w.part === "t" ? St : Ss, chars = [...w.text], n = chars.length, m = w.la.length;
+        const sp = P.stretch * Math.max(0, clamp(w.stretch, -1, 2.5)) * 0.045 * S;
+        let x = 0;
+        w.S = S;
+        w.chars = chars.map((c, k) => {
+          const kk = m ? Math.round((k * (m - 1)) / Math.max(1, n - 1)) : 0;
+          const a = m ? w.la[kk] / 255 : 0.55, wt = wOf(a, w), size = S * sOf(a, w), cw = measure(c, P.font, wt, size);
+          const ch = { c, x, cw, wt, size, pit: w.lp.length && w.lp[kk] ? (w.lp[kk] - 128) / 8 : null };
+          x += cw + sp; return ch;
+        });
+        w.width = Math.max(0, x - sp);
+      }
+    };
+    const wrap = (ws, space) => {  // balanced lines: the fewest lines that fit, then the narrowest width that keeps that count
+      const segs = []; ws.forEach((w) => { if (!segs.length || w.br) segs.push([]); segs[segs.length - 1].push(w); });
+      const greedy = (seg, lim) => { const out = []; let L = null;
+        for (const w of seg) { if (L && L.width + space + w.width <= lim) { L.words.push(w); L.width += space + w.width; } else { L = { words: [w], width: w.width }; out.push(L); } }
+        return out; };
+      const lines = [];
+      for (const seg of segs) {
+        const n = greedy(seg, maxW).length;
+        let lo = Math.max(...seg.map((w) => w.width)), hi = maxW;
+        for (let it = 0; it < 18 && hi - lo > 1; it++) { const mid = (lo + hi) / 2; if (greedy(seg, mid).length <= n) hi = mid; else lo = mid; }
+        lines.push(...greedy(seg, Math.max(hi, lo)));
+      }
+      return lines;
+    };
+    const tw = words.filter((w) => w.part === "t"), sw = words.filter((w) => w.part === "s");
+    let St = T.tSize * u, Ss = St * T.subRatio, tl = [], sl = [], dims = null;
+    for (let it = 0; it < 30; it++) {
+      shape(St, Ss);
+      const spT = measure(" ", P.font, P.weight, St), spS = measure(" ", P.font, P.weight, Ss);
+      tl = tw.length ? wrap(tw, spT) : []; sl = sw.length ? wrap(sw, spS) : [];
+      const lhT = St * P.lineHeight, lhS = Ss * Math.max(1.18, P.lineHeight);
+      const hT = tl.length ? (tl.length - 1) * lhT + St * 1.04 : 0, hS = sl.length ? (sl.length - 1) * lhS + Ss * 1.04 : 0;
+      const gap = tl.length && sl.length ? (T.rule || P.trace > 0 ? St * 0.5 : St * 0.32) : 0;
+      dims = { lhT, lhS, hT, hS, gap, spT, spS, h: hT + gap + hS };
+      const widest = Math.max(0, ...tl.map((L) => L.width), ...sl.map((L) => L.width));
+      if ((widest <= maxW + 0.5 && dims.h <= maxH) || St < 24 * u) break;
+      const k = Math.min(maxW / Math.max(widest, 1), maxH / Math.max(dims.h, 1), 0.97);
+      St *= Math.max(0.6, k * 0.995); Ss = St * T.subRatio;
+    }
+    // where the block sits: the same placements as the captions
+    let top;
+    if (P.placement === "editorial") top = vertical ? box.y0 + maxH * 0.1 : H * clamp(P.position - 0.14, 0.08, 0.6);
+    else if (P.placement === "ticker") top = (vertical ? box.y1 : H * 0.88) - dims.h;
+    else top = (vertical ? box.y0 + maxH * P.position : H * P.position) - dims.h / 2;
+    top = clamp(top, box.y0, Math.max(box.y0, box.y1 - dims.h));
+    const lineX = (wd) => (align === "left" ? box.x0 : (box.x0 + box.x1 - wd) / 2);
+    const median = (arr) => { const a = arr.filter((v) => v != null).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
+    const ref = median(words.flatMap((w) => w.chars.map((c) => c.pit)));
+    const place = (lines, y0, lh, S, space) => lines.forEach((L, li) => {
+      let x = lineX(L.width); const base = y0 + S * 0.8 + li * lh; L.base = base;
+      L.words.forEach((w) => {
+        w.x = x; w.base = base; x += w.width + space;
+        const pitchPx = P.lift * w.S * 0.07, pv = w.chars.map((c) => c.pit), n = pv.length, known = pv.map((v, k) => (v == null ? -1 : k)).filter((k) => k >= 0);
+        if (ref == null || !known.length) w.chars.forEach((c) => (c.dy = 0));
+        else {
+          const filled = pv.map((v, k) => { if (v != null) return v; let a = -1, b = -1; for (const q of known) { if (q < k) a = q; if (q > k && b < 0) b = q; }
+            if (a < 0) return pv[b]; if (b < 0) return pv[a]; return pv[a] + ((pv[b] - pv[a]) * (k - a)) / (b - a); });
+          const sm = filled.map((v, k) => (filled[Math.max(0, k - 1)] + 2 * v + filled[Math.min(n - 1, k + 1)]) / 4);
+          const mean = sm.reduce((a, b) => a + b, 0) / n;
+          w.chars.forEach((c, k) => { c.dy = -clamp(((mean - ref) + 0.6 * clamp(sm[k] - mean, -3, 3)) * pitchPx, -0.55 * w.S, 0.55 * w.S); });
+        }
+        w.rot = clamp(P.tilt * w.slope * 0.5, -9, 9);
+      });
+    });
+    place(tl, top, dims.lhT, St, dims.spT);
+    const subTop = top + dims.hT + dims.gap;
+    place(sl, subTop, dims.lhS, Ss, dims.spS);
+    // the divider between title and subtitle; with Melody line it draws the tune of the title where it is spoken
+    let rule = null, trace = null;
+    if (tl.length && sl.length) {
+      const y = top + dims.hT + dims.gap * 0.5, rw = Math.max(60 * u, Math.min(W * 0.065, maxW)), th = Math.max(2, 3 * u);
+      const heard = tw.filter((w) => w.src != null).map((w) => data.words[w.src]);
+      if (P.trace > 0 && heard.length >= 2) {
+        const s0 = Math.min(...heard.map((d) => d.s)), e0 = Math.max(...heard.map((d) => d.e));
+        if (e0 - s0 > 0.3 && e0 - s0 < 15) {
+          const tw2 = Math.min(maxW, Math.max(...tl.map((L) => L.width)));
+          trace = { x: lineX(tw2), w: tw2, y, s0, e0, amp: St * 0.14, th: Math.max(1.5, St * 0.018) };
+        }
+      }
+      if (!trace && T.rule) rule = { x: lineX(rw), y: y - th / 2, w: rw, h: th };
+    }
+    return { thumb: true, W, H, S: St, Ss, P, T, pal, tcol, neutral, themes, words, lines: tl.concat(sl), box, env, rule, trace, ref,
+      heard: words.filter((w) => w.src != null).length, total: words.length };
+  }
+  /* drawThumb(ctx, scene): ctx scaled so 1 unit = 1 output pixel (multiply for a sharper export). Returns hit boxes of the words. */
+  function drawThumb(ctx, sc) {
+    const { W, H, P, pal } = sc, boxes = [];
+    ctx.save(); ctx.globalAlpha = 1; ctx.fillStyle = pal.bg; ctx.fillRect(0, 0, W, H);
+    if (sc.rule) { ctx.fillStyle = sc.neutral; ctx.globalAlpha = 0.9; ctx.fillRect(sc.rule.x, sc.rule.y, sc.rule.w, sc.rule.h); ctx.globalAlpha = 1; }
+    if (sc.trace) {
+      const t = sc.trace; let pen = false;
+      ctx.save(); ctx.globalAlpha = clamp(P.trace, 0, 1); ctx.strokeStyle = sc.neutral; ctx.lineWidth = t.th; ctx.lineJoin = ctx.lineCap = "round"; ctx.beginPath();
+      for (let tt = t.s0; tt <= t.e0; tt += 0.02) {
+        const v = pitchAt(sc.env, tt); if (v == null || sc.ref == null) { pen = false; continue; }
+        const x = t.x + ((tt - t.s0) / (t.e0 - t.s0)) * t.w, y = t.y - clamp(v - sc.ref, -6, 6) * t.amp / 6;
+        if (pen) ctx.lineTo(x, y); else { ctx.moveTo(x, y); pen = true; }
+      }
+      ctx.stroke(); ctx.restore();
+    }
+    ctx.textAlign = "center"; ctx.textBaseline = "alphabetic";
+    for (const w of sc.words) {
+      if (w.x == null) continue;
+      ctx.save();
+      if (w.rot) { const cx = w.x + w.width / 2, cy = w.base - w.S * 0.3; ctx.translate(cx, cy); ctx.rotate((-w.rot * Math.PI) / 180); ctx.translate(-cx, -cy); }
+      ctx.fillStyle = w.color; let last = "";
+      for (const c of w.chars) {
+        const f = `${c.wt} ${c.size.toFixed(1)}px "${P.font}"`; if (f !== last) { ctx.font = f; last = f; }
+        ctx.fillText(c.c, w.x + c.x + c.cw / 2, w.base + c.dy);
+      }
+      ctx.restore();
+      boxes.push({ i: w.i, x: w.x, y: w.base - w.S * 0.85, w: w.width, h: w.S * 1.15 });
+    }
+    ctx.restore();
+    return boxes;
+  }
+  const api = { ASPECTS, FONTS, PALETTES, DEFAULTS, PRESETS, params, buildScene, draw, themeColors, themePalette, themeIndex, mix, contrast, clamp,
+    buildThumb, drawThumb, thumbParams, thumbDefaults, THUMB_DEFAULTS };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.VC = api;
 })(typeof window !== "undefined" ? window : globalThis);

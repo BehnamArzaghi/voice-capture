@@ -28,10 +28,18 @@ The Library tab lists the recordings in Drive. After Claude processes them ("pro
 
 - `Captions/<audio id>.captions.json`: written by Claude (words, timings, voice analysis). The file description holds a short JSON summary (rev, title, Notion link, video id) for the Library.
 - `Captions/<audio id>.mp4` and `.srt`: rendered videos, made when the studio asks for one.
-- `Studio/<audio id>.edits.json`: written by the app (look, corrections, render request). Claude re-times corrected words, raises `rev`, and includes an index remap so emphasis edits carry over.
+- `Studio/<audio id>.edits.json`: written by the app (look, corrections, render request, thumbnail).
+- `Studio/<audio id>.thumbnail.png`: the thumbnail, when saved to Drive from the Thumbnail tab. Claude re-times corrected words, raises `rev`, and includes an index remap so emphasis edits carry over.
 - `Captions/vocabulary.txt`: names and terms given to the transcriber; corrected words and hard-to-spell glossary terms are added.
 - `Captions/library.json`: the Library's summary of every captions file (title, rev, Notion link, video); written by `notes.py publish`.
 - `Captions/glossary.json`: a copy of the Notion **Glossary** database (themes with their Notion colors; terms with forms, definition, source, status, verified). Claude refreshes it on each run.
+
+## Thumbnails
+The studio's Thumbnail tab makes a still title card for the video, drawn by the same engine as the captions. It starts from the recording's title, split at the first colon into title and subtitle, and uses the video's look until a look control in the tab changes it. From then on it keeps its own look: the same looks, saved looks, colors, typefaces, placements, formats (16:9, 9:16, 1:1, 4:5) and voice and meaning settings as the captions, plus title and subtitle size, case (including Title Case) and a divider.
+
+Words of the title that are heard in the recording borrow the loudness and pitch of the moment they are spoken, so weight, size, lift and lean work as they do in the video; Melody line turns the divider into the tune of the title as it was said. Glossary terms take their theme's color. Tap a word on the image (or in the tab's word list) to emphasize it, quiet it or change its theme; edits stay with the word when the text changes.
+
+Save image exports a PNG at twice the video frame (3840 × 2160 for 16:9). On a phone it opens the share sheet (Save Image, Save to Files); on a computer it downloads. Save to Drive writes `Studio/<audio id>.thumbnail.png`. The text, look and word edits are saved in the recording's `edits.json` (`thumb`), and `tools/notes.py thumb WORK/ID EDITS.json` draws the same image in the pipeline.
 
 ## Themes and the glossary
 Theme colors come from Notion: the Glossary database's Theme options (the same ten as Substack Articles) keep their Notion color in every recording, adjusted for contrast on each palette. When Claude processes a note it tags the glossary's terms in the transcript (`notes.py tag`), and suggests themes for the note's Notion row when a theme is heard at least 4 times, or 3 times across 2 different terms.

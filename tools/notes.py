@@ -14,6 +14,7 @@
         hand a run's files to Drive in one step: updates Captions/library.json; with --drive-dir writes into a Drive for desktop
         folder, otherwise prints one upload plan for the Drive connector
   notes.py render WORK/ID EDITS.json               render the requested video (+ .srt) with the studio's look
+  notes.py thumb WORK/ID EDITS.json [--glossary glossary.json]   the studio's thumbnail as a PNG (3840 x 2160 for 16:9)
   notes.py set WORK/ID key=value ...               set captions fields before upload (listen=<Drive id of the listening copy>)
   notes.py ref FILE                                file reference for the Drive connector's create_file (no bytes through chat)
 
@@ -25,7 +26,8 @@ Drive layout (inside "Voice Notes Inbox"):
   Captions/library.json       {items: {ID: {rev, title, duration, notion, videoId, videoAt, srtId}}}: what the Library shows
   Captions/glossary.json      copy of the Notion Glossary (themes, colors, terms)
   Listening copies/ID.m4a     small copy that Notion's audio player fetches (folder shared by link)
-  Studio/ID.edits.json        written by the app: {base, params, fixes, render}
+  Studio/ID.edits.json        written by the app: {base, params, fixes, render, glossary, thumb}
+  Studio/ID.thumbnail.png     the studio's thumbnail, when saved to Drive from the Thumbnail tab
 """
 import argparse, difflib, hashlib, json, os, re, shutil, subprocess, sys, time
 
@@ -175,6 +177,32 @@ def cmd_render(a):
     mp4 = f"{d}/voicecap_full.mp4"
     print(json.dumps({"mp4_ref": ref(mp4), "mp4_mb": round(os.path.getsize(mp4) / 1e6, 1), "srt_ref": ref(f"{d}/captions.srt"),
                       "next": "upload mp4 + srt to Captions, then: notes.py set DIR videoId=<mp4 id> srtId=<srt id>, upload captions.json, set its description"}, indent=1))
+
+
+def cmd_thumb(a):
+    """Render the thumbnail set up in the studio's Thumbnail tab (edits.json "thumb"), with the captions' themes and the glossary's colors."""
+    d = a.dir
+    E = json.load(open(a.edits))
+    cap = json.load(open(f"{d}/captions.json"))
+    data = cap["data"]
+    if a.glossary and os.path.exists(a.glossary):  # the studio adds the glossary's themes (with their Notion colors) to the recording's
+        G = json.load(open(a.glossary))
+        themes, colors = list(data.get("themes") or []), list(data.get("themeColors") or [])
+        for t in G.get("themes", []):
+            if t.get("name") and t["name"] not in themes:
+                themes.append(t["name"]); colors.append(t.get("color"))
+        data = dict(data, themes=themes, themeColors=colors)
+    th = dict(E.get("thumb") or {})
+    if not (th.get("title") or th.get("subtitle")):  # never opened in the studio: start from the recording title, split at the colon
+        t = cap.get("title") or ""
+        k = t.find(":")
+        th.update({"title": t[:k].strip(), "subtitle": t[k + 1:].strip()} if k > 0 else {"title": t})
+    spec = {"thumb": th, "params": E.get("params") or {}}
+    sp, dp = f"{d}/thumb.spec.json", f"{d}/thumb.data.json"
+    json.dump(spec, open(sp, "w")); json.dump(data, open(dp, "w"))
+    out = a.out or f"{d}/thumbnail.png"
+    sh(sys.executable, VC, "thumb", d, "--spec", sp, "--data", dp, "--out", out)
+    print(json.dumps({"png_ref": ref(out), "mb": round(os.path.getsize(out) / 1e6, 2), "name": f"{cap.get('audioId', os.path.basename(d))}.thumbnail.png"}, indent=1))
 
 
 def cmd_restore(a):
@@ -417,6 +445,7 @@ def main():
     x = sp.add_parser("apply"); x.add_argument("dir"); x.add_argument("edits"); x.add_argument("--vocab")
     r = sp.add_parser("render"); r.add_argument("dir"); r.add_argument("edits")
     f = sp.add_parser("ref"); f.add_argument("file")
+    tb = sp.add_parser("thumb"); tb.add_argument("dir"); tb.add_argument("edits"); tb.add_argument("--glossary"); tb.add_argument("--out")
     rs = sp.add_parser("restore"); rs.add_argument("audio"); rs.add_argument("captions")
     st = sp.add_parser("set"); st.add_argument("dir"); st.add_argument("pairs", nargs="+")
     rt = sp.add_parser("retime"); rt.add_argument("audio"); rt.add_argument("captions")
@@ -435,6 +464,8 @@ def main():
         cmd_apply(a)
     elif a.cmd == "render":
         cmd_render(a)
+    elif a.cmd == "thumb":
+        cmd_thumb(a)
     elif a.cmd == "restore":
         cmd_restore(a)
     elif a.cmd == "set":

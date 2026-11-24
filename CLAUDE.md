@@ -11,8 +11,8 @@ Behnam Arzaghi's voice recorder and caption studio. It is an iPhone web app on G
 | Path | What |
 |---|---|
 | `index.html`, `app.js` | Recorder and Library tabs |
-| `studio.html` | Caption studio: Look, Voice (themes), Motion and Words tabs; word sheet; term sheet |
-| `engine.js` | Caption engine. The studio and the video renderer share it, so changes show in both |
+| `studio.html` | Caption studio: Look, Voice (themes), Motion, Words and Thumbnail tabs; word sheet; term sheet |
+| `engine.js` | Caption engine (video frames, and thumbnails with `buildThumb`/`drawThumb`). The studio and the renderers share it, so changes show in both |
 | `shared.js` | `VCDrive`: Drive helpers used by both pages |
 | `sw.js` | Service worker. **Bump `CACHE` (vc-shell-vN) whenever a shipped file changes** |
 | `tools/notes.py` | Pipeline commands: prepare, apply, retime, glossary, tag, publish, render (see its docstring) |
@@ -24,7 +24,7 @@ Behnam Arzaghi's voice recorder and caption studio. It is an iPhone web app on G
 ```bash
 python3 tests/test_tools.py        # pipeline checks, a few seconds
 python3 tests/run_tests.py         # browser tests, about 1 minute; screenshots in tests/shots/
-python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, cards, requests
+python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, cards, requests, thumb
 ```
 - The tests serve the repo locally and stand in for Google Drive with local files. They need Playwright for Python and a Chrome or Chromium: `python3 tools/notes.py setup` installs them, or `pip install playwright && playwright install chromium`.
 - Look at the screenshots for anything visual. Check both a phone viewport (390×844) and a desktop one (1440×900).
@@ -40,7 +40,9 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
 - `Captions/<audio id>.captions.json`: `{audioId, title, rev, duration, notion, listen, video, remap, data}`. `data` holds `words` (w, s, e, p, fl, fn, th, emph, pitch, ...), `env`, `themes`, `themeColors` and `terms`. Raise `rev` only when the words change (`notes.py apply`), and store an index remap when it does.
 - `Captions/library.json`: `{items: {id: {rev, title, duration, notion, videoId, videoAt, srtId}}}`. The Library reads this, and also each file's Drive description (older runs); whichever is newer wins.
 - `Captions/glossary.json`: a copy of the Notion Glossary. `updatedAt` marks which studio requests are done.
-- `Studio/<id>.edits.json`, written by the studio: `{base, params, fixes, render, glossary}`.
+- `Studio/<id>.edits.json`, written by the studio: `{base, params, fixes, render, glossary, thumb}`.
+  - `thumb`: `{title, subtitle, follow, look, tSize, subRatio, rule, edits, thEdits}`. `follow: true` means the video's look (`params`); otherwise `look` holds its own, like a saved look. Its `edits` and `thEdits` are keyed by word and occurrence (`"myth#0"`), not by index, so they survive changes to the text.
+- `Studio/<id>.thumbnail.png`: the thumbnail, saved from the Thumbnail tab.
   - `params.thEdits` maps a word index to a theme name, with `""` for no theme. Older edits use numeric indices.
   - `params.thOff` lists hidden themes. Like `edits` and `thEdits`, it belongs to the recording and is never saved in a look.
 - `Studio/looks.json`: saved looks.

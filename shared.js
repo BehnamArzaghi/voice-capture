@@ -83,6 +83,23 @@ window.VCDrive = (() => {
     if (!r.ok) throw new Error(await why(r, "Drive save"));
     return r.json();
   }
+  // create or overwrite a file the app owns from a Blob (the studio's thumbnail image)
+  async function saveBlob(parent, name, blob, id, description) {
+    const type = blob.type || "application/octet-stream";
+    const body = (m) => {
+      const b = "vc" + Math.random().toString(36).slice(2);
+      return { headers: { "Content-Type": "multipart/related; boundary=" + b },
+        body: new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(JSON.parse(JSON.stringify(m)))}\r\n--${b}\r\nContent-Type: ${type}\r\n\r\n`, blob, `\r\n--${b}--`]) };
+    };
+    if (id) {
+      const r = await api("PATCH", `${UPLOAD}/${id}?uploadType=multipart&fields=id,modifiedTime`, body({ description }));
+      if (r.ok) return r.json();
+      if (r.status !== 404) throw new Error(await why(r, "Drive save"));
+    }
+    const r = await api("POST", `${UPLOAD}?uploadType=multipart&fields=id,modifiedTime`, body({ name, parents: [parent], mimeType: type, description }));
+    if (!r.ok) throw new Error(await why(r, "Drive save"));
+    return r.json();
+  }
   function multipart(meta, body) {
     const b = "vc" + Math.random().toString(36).slice(2);
     const clean = JSON.parse(JSON.stringify(meta));
@@ -90,5 +107,5 @@ window.VCDrive = (() => {
       body: `--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(clean)}\r\n--${b}\r\nContent-Type: application/json\r\n\r\n${body}\r\n--${b}--` };
   }
   const meta = (s) => { try { return s ? JSON.parse(s) : {}; } catch (e) { return {}; } };
-  return { S, CFG, AuthError, token, canRead, api, why, list, findFolder, ensureSub, inbox, getJson, getBlob, saveJson, meta, quote };
+  return { S, CFG, AuthError, token, canRead, api, why, list, findFolder, ensureSub, inbox, getJson, getBlob, saveJson, saveBlob, meta, quote };
 })();

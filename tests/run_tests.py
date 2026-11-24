@@ -2,11 +2,11 @@
 """Browser tests for the Library (index.html) and the caption studio (studio.html).
 
   python3 tests/run_tests.py            all tests; screenshots go to tests/shots/
-  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, cards, requests)
+  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, cards, requests, thumb)
 
 Needs Playwright for Python and the Chrome that `tools/vc.py setup` installs. Exits non-zero when a check fails.
 """
-import asyncio, json, os, sys, tempfile
+import asyncio, json, os, shutil, subprocess, sys, tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import harness as H  # noqa: E402
@@ -150,7 +150,80 @@ async def t_requests(p, base):
     H.EDITS = ""
 
 
-GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "cards": t_cards, "requests": t_requests}
+async def t_thumb(p, base):
+    for name, w, h, mob in (("desk", 1440, 900, False), ("phone", 390, 844, True)):
+        H.SAVES.clear()
+        b, pg, errs = await open_studio(p, base, w, h, mob)
+        await pg.click("#tabs [data-t=thumb]"); await pg.wait_for_timeout(500)
+        st = await pg.evaluate("() => ({on: document.body.classList.contains('thumb'), t: __studio.TH.title, s: __studio.TH.subtitle, n: __studio.tscene.words.length, W: __studio.tscene.W, H: __studio.tscene.H})")
+        C(st["on"] and st["t"] == "Test walk" and st["s"].startswith("creativity"), f"thumb {name}: starts from the recording title, split at the colon", st)
+        C("3840 × 2160" in await pg.inner_text("#thumbInfo"), f"thumb {name}: exports at 3840 × 2160")
+        await pg.fill("#tTitle", "Creativity and the rhizome"); await pg.wait_for_timeout(400)
+        heard = await pg.evaluate("__studio.tscene.words.filter(w => w.part === 't' && w.src != null).map(w => w.text)")
+        C(heard == ["Creativity", "and", "the", "rhizome"], f"thumb {name}: title words found where they are spoken", heard)
+        await pg.screenshot(path=f"{H.OUT}/thumb_{name}.png")
+        await pg.click("#tPalettes [data-v=Ink]"); await pg.wait_for_timeout(300)
+        st = await pg.evaluate("() => ({f: __studio.TH.follow, tp: __studio.TH.look.palette, vp: __studio.P.palette})")
+        C(st["f"] is False and st["tp"] == "Ink" and st["vp"] != "Ink", f"thumb {name}: its own look leaves the video's look alone", st)
+        await pg.click('#tPresets [data-tl="video"]'); await pg.wait_for_timeout(300)
+        C(await pg.evaluate("__studio.TH.follow && __studio.tscene.P.palette === __studio.P.palette"), f"thumb {name}: Video's look follows the captions again")
+        await pg.click("#tPresets [data-tl='p:Poster']"); await pg.wait_for_timeout(400)
+        C(await pg.evaluate("__studio.tscene.P.font") == "Bricolage Grotesque", f"thumb {name}: a built-in look applies")
+        k = await pg.evaluate("__studio.tscene.words.findIndex(w => w.text === 'rhizome')")
+        wt0 = await pg.evaluate(f"__studio.tscene.words[{k}].chars[0].wt")
+        await pg.click(f"#tWords span[data-k='{k}']"); await pg.wait_for_timeout(300)
+        await pg.click("#tedSeg [data-v=emph]"); await pg.wait_for_timeout(500)
+        st = await pg.evaluate(f"() => ({{e: __studio.TH.edits['rhizome#0'], wt: __studio.tscene.words[{k}].chars[0].wt}})")
+        C(st["e"] == "emph" and st["wt"] > wt0, f"thumb {name}: Emphasize makes the word heavier", st)
+        await pg.click('#tthRow [data-v="Re-enchantment"]'); await pg.wait_for_timeout(500)
+        C(await pg.evaluate("__studio.TH.thEdits['rhizome#0']") == "Re-enchantment", f"thumb {name}: a word can take a theme")
+        await pg.screenshot(path=f"{H.OUT}/thumb_word_{name}.png")
+        await pg.click("#tDone"); await pg.wait_for_timeout(200)
+        await pg.fill("#tTitle", "The rhizome, again"); await pg.wait_for_timeout(400)
+        C(await pg.evaluate("__studio.tscene.words.find(w => w.key === 'rhizome#0').emph"), f"thumb {name}: an edit stays with its word when the text changes")
+        await pg.click("#undo"); await pg.wait_for_timeout(400)
+        C(await pg.evaluate("__studio.TH.title") == "Creativity and the rhizome", f"thumb {name}: Undo restores the earlier text")
+        box = await pg.evaluate(f"() => {{ const s = __studio.tscene, w = s.words.find(x => x.text === 'Creativity'), r = document.getElementById('cv').getBoundingClientRect(); return {{x: r.left + (w.x + w.width / 2) / s.W * r.width, y: r.top + (w.base - w.S * 0.3) / s.H * r.height}}; }}")
+        await pg.mouse.click(box["x"], box["y"]); await pg.wait_for_timeout(300)
+        C("Creativity" in await pg.inner_text("#sheetBody .w"), f"thumb {name}: tapping a word on the image opens it")
+        await pg.click("#tDone")
+        await pg.click("#tAspect [data-v='9:16']"); await pg.wait_for_timeout(400)
+        C(await pg.evaluate("[__studio.tscene.W, __studio.tscene.H]") == [1080, 1920], f"thumb {name}: 9:16 format")
+        if not mob:
+            async with pg.expect_download() as dl:
+                await pg.click("#thumbSave")
+            d = await dl.value; path = os.path.join(tempfile.mkdtemp(), d.suggested_filename); await d.save_as(path)
+            from PIL import Image
+            C(d.suggested_filename == "creativity-and-the-rhizome-thumbnail.png" and Image.open(path).size == (2160, 3840), "thumb: Save image downloads the PNG at full size", (d.suggested_filename, Image.open(path).size))
+        await pg.click("#thumbDrive"); await pg.wait_for_timeout(800)
+        C(any(H.AID + ".thumbnail.png" in s and "PNG" in s for s in H.SAVES), f"thumb {name}: Save to Drive uploads the image to Studio")
+        await pg.evaluate("window.__studio.flush()"); await pg.wait_for_timeout(400)
+        body = next((s for s in reversed(H.SAVES) if '"audioId"' in s), "")
+        doc = json.loads(body[body.index('{"v":1,"audioId"'):body.rindex("}") + 1]) if body else {}
+        C((doc.get("thumb") or {}).get("title") == "Creativity and the rhizome", f"thumb {name}: text, look and edits saved in edits.json", doc.get("thumb"))
+        await pg.click("#tabs [data-t=look]"); await pg.wait_for_timeout(300)
+        C(not await pg.evaluate("document.body.classList.contains('thumb')") and await pg.is_visible("#renderBtn"), f"thumb {name}: leaving the tab brings the video back")
+        C(not errs, f"thumb {name}: no page errors", errs); await b.close()
+    # a saved thumbnail comes back when the studio opens
+    ed = os.path.join(tempfile.mkdtemp(), "edits.json")
+    json.dump({"v": 1, "audioId": H.AID, "base": 1, "params": {"preset": "Typewriter"}, "fixes": {}, "render": None, "glossary": [],
+               "thumb": {"title": "Saved title", "subtitle": "", "follow": False, "look": {"preset": "Score"}, "edits": {"title#0": "quiet"}}}, open(ed, "w"))
+    H.EDITS = ed
+    # the pipeline draws the same thumbnail from edits.json (notes.py thumb)
+    d = tempfile.mkdtemp(); os.makedirs(os.path.join(d, "REC")); shutil.copy(H.CAPS, os.path.join(d, "REC", "captions.json"))
+    r = subprocess.run([sys.executable, os.path.join(H.REPO, "tools", "notes.py"), "thumb", os.path.join(d, "REC"), ed, "--glossary", H.GLOSSF], capture_output=True, text=True)
+    from PIL import Image
+    png = os.path.join(d, "REC", "thumbnail.png")
+    C(r.returncode == 0 and os.path.exists(png) and Image.open(png).size == (3840, 2160), "thumb: notes.py thumb renders the saved thumbnail at 3840 × 2160", (r.stdout + r.stderr)[-300:])
+    b, pg, errs = await open_studio(p, base)
+    await pg.click("#tabs [data-t=thumb]"); await pg.wait_for_timeout(500)
+    st = await pg.evaluate("() => ({v: document.getElementById('tTitle').value, f: __studio.tscene.P.font, q: __studio.tscene.words[1].quiet})")
+    C(st == {"v": "Saved title", "f": "Fraunces", "q": True}, "thumb: a saved thumbnail is restored", st)
+    C(not errs, "thumb: no page errors on restore", errs); await b.close()
+    H.EDITS = ""
+
+
+GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "cards": t_cards, "requests": t_requests, "thumb": t_thumb}
 
 
 async def main(names):
