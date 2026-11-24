@@ -327,6 +327,54 @@ def load16(out):
         return np.frombuffer(w.readframes(w.getnframes()), np.int16).astype(np.float32) / 32768.0
 
 
+# ---------------------------------------------------------------- noise reduction
+# RNNoise (Valin, 2018) through ffmpeg's arnndn, with the "somnolent-hogwash" model trained for speech under recording noise
+# (GregorR/rnnoise-models; the model files are not subject to copyright). On Behnam's car and wind recordings it lowered the
+# noise between words by 10-17 dB without hurting transcription (Whisper agreed with the transcript as well or better).
+RNN_MODEL = os.path.join(HERE, "models", "sh.rnnn")
+CLEAN_LEVELS = ("off", "light", "full")
+
+
+def clean_chain(level):
+    """ffmpeg -af chain for a noise-reduction level. Light keeps some room sound; Full also removes the steady hiss left after RNNoise."""
+    m = RNN_MODEL.replace("\\", "/").replace(":", "\\:")
+    # cleaning lowers the voice too; speechnorm brings it back up per phrase without lifting the quiet gaps (dynaudnorm did, and
+    # undid about 2 dB of the gain)
+    level_up = "speechnorm=e=6:r=0.0001:l=1,alimiter=limit=0.95"
+    if level == "light":
+        return f"highpass=f=80,arnndn=m={m}:mix=0.85,{level_up}"
+    if level == "full":
+        return f"highpass=f=100,arnndn=m={m},afftdn=nr=10:nf=-50:tn=1,{level_up}"
+    return None
+
+
+def clean_audio(src, level, dest, extra=()):
+    """Write SRC with noise reduction LEVEL to DEST (format from its extension; EXTRA = output options such as codec and bitrate)."""
+    chain = clean_chain(level)
+    sh(["ffmpeg", "-v", "error", "-y", "-i", src, "-vn", *(["-af", chain] if chain else []), *extra, dest])
+    return dest
+
+
+def noise_level(x, words=None, sr=SR):
+    """How much louder the voice is than the background, in dB (higher is cleaner), and the cleaning level that suits it.
+    With word timings: speech frames against the gaps between words (at least 0.2 s from any word). Without (before
+    transcription): a rough estimate from the spread of loudness, mapped onto about the same scale."""
+    hop = sr // 50
+    n = len(x) // hop
+    db = 10 * np.log10((x[:n * hop].reshape(n, hop) ** 2).mean(1) + 1e-10)
+    fps = sr / hop
+    if words:
+        sp = np.zeros(n, bool); near = np.zeros(n, bool)
+        for w in words:
+            a, b = int(w["s"] * fps), int(w["e"] * fps) + 1
+            sp[a:b] = True; near[max(0, a - int(0.2 * fps)):b + int(0.2 * fps)] = True
+        if sp.sum() > 50 and (~near).sum() > 50:
+            snr = float(np.median(db[sp]) - np.median(db[~near]))
+            return round(snr, 1), ("full" if snr < 8 else "light" if snr < 16 else "off")
+    spread = float(np.percentile(db, 95) - np.percentile(db, 15))
+    return round(spread - 10, 1), ("full" if spread < 17 else "light" if spread < 25 else "off")
+
+
 # ---------------------------------------------------------------- transcribe
 def transcribe(out, lang=None, prompt=None, quality="accurate"):
     from faster_whisper import WhisperModel
@@ -1218,7 +1266,7 @@ def frames(out, params, times, prefix):
     return paths
 
 
-def render(out, params=None, start=0.0, dur=None, dest=None, fps=30, abr="128k", chunk=60.0, bitrate=2_500_000):
+def render(out, params=None, start=0.0, dur=None, dest=None, fps=30, abr="128k", chunk=60.0, bitrate=2_500_000, audio=None):
     """Draws every frame with the same engine as the player (headless Chrome), encodes H.264 in resumable chunks, muxes audio."""
     P = load_params(params); data = json.load(open(f"{out}/data.json"))
     total = data["duration"]
@@ -1261,7 +1309,7 @@ def render(out, params=None, start=0.0, dur=None, dest=None, fps=30, abr="128k",
                 shutil.copyfileobj(f, o)
     log("muxing audio…")
     sh(["ffmpeg", "-v", "error", "-y", "-r", str(fps), "-f", "h264", "-i", allp, "-ss", str(start), "-t", str(dur),
-        "-i", f"{out}/master.flac", "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-bsf:v", f"h264_metadata=tick_rate={2 * fps}",
+        "-i", audio or f"{out}/master.flac", "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-bsf:v", f"h264_metadata=tick_rate={2 * fps}",
         "-c:a", "aac", "-b:a", abr, "-ar", "48000",
         "-t", str(dur), "-movflags", "+faststart", dest])
     os.remove(allp)
@@ -1283,6 +1331,7 @@ def main():
     c = sp.add_parser("concepts"); c.add_argument("dir"); c.add_argument("--file", required=True)
     v = sp.add_parser("render"); v.add_argument("dir"); v.add_argument("--params"); v.add_argument("--start", type=float, default=0)
     v.add_argument("--dur", type=float); v.add_argument("--out"); v.add_argument("--fps", type=int, default=30); v.add_argument("--abr", default="128k")
+    v.add_argument("--audio", help="sound for the video (default DIR/master.flac); notes.py passes the noise-reduced version")
     fr = sp.add_parser("frames"); fr.add_argument("dir"); fr.add_argument("--params"); fr.add_argument("--times", required=True); fr.add_argument("--prefix", default="/tmp/vcframe")
     th = sp.add_parser("thumb"); th.add_argument("dir"); th.add_argument("--spec", required=True, help='{"thumb": ..., "params": ...} or a file with it')
     th.add_argument("--out"); th.add_argument("--scale", type=float, default=2.0); th.add_argument("--data", help="captions.json or data.json (default DIR/data.json)")
@@ -1307,7 +1356,7 @@ def main():
         spec = json.load(open(A.file)); shutil.copy(A.file, f"{A.dir}/concepts.json") if os.path.abspath(A.file) != os.path.abspath(f"{A.dir}/concepts.json") else None
         apply_concepts(A.dir, spec)
     elif A.cmd == "render":
-        render(A.dir, A.params, A.start, A.dur, A.out, A.fps, A.abr)
+        render(A.dir, A.params, A.start, A.dur, A.out, A.fps, A.abr, audio=A.audio)
     elif A.cmd == "frames":
         frames(A.dir, A.params, [float(x) for x in A.times.split(",")], A.prefix)
     elif A.cmd == "thumb":

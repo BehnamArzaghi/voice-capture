@@ -164,6 +164,7 @@
   .words span.sug { text-decoration:underline dashed; text-decoration-thickness:1px; text-underline-offset:5px; }
   .words span.insel { background:#E1EAF3; }
   .sheet { max-height:84vh; overflow:auto; }
+  .seg button.rec::after { content:""; display:inline-block; width:6px; height:6px; border-radius:3px; background:currentColor; margin-left:7px; vertical-align:2px; opacity:.55; }
   .sheet.on ~ .toast { bottom:auto; top:calc(14px + env(safe-area-inset-top)); }  /* keep messages clear of an open sheet */
   /* Thumbnail tab: the stage shows the still image; the transport gives way to a size line; the footer saves the image */
   .thumbinfo { display:none; font:500 12px/1.4 "Inter"; color:var(--ink2); text-align:center; padding:10px 0 0; }
@@ -236,6 +237,7 @@
     <h2>Size</h2><div id="look-sliders"></div>
   </section>
   <section class="panel" id="p-voice">
+    <h2>Sound</h2><p class="muted" id="soundNote" style="margin:-2px 0 8px"></p><div class="seg" id="denoise"></div>
     <h2>How your voice shapes the words</h2><div id="voice-sliders"></div>
     <h2>Meaning</h2><div id="meaning-sliders"></div>
     <div class="slider" style="border-bottom:0"><div class="top2"><label>Definition cards</label></div><div class="help" id="cardsHelp">A short card with a term's definition where it is first heard</div><div class="seg" id="cards" style="margin-top:8px"></div></div>
@@ -311,8 +313,8 @@ function setP(patch, record = true) {
   if (record) pushHist();
   P = Object.assign({}, P, patch); syncUI(); rebuild();
 }
-const KEEP = ["edits", "thEdits", "thOff"];  // per-recording settings: kept when the look changes, never saved in a look
-const kept = () => ({ edits: P.edits, thEdits: P.thEdits, thOff: P.thOff });
+const KEEP = ["edits", "thEdits", "thOff", "denoise"];  // per-recording settings: kept when the look changes, never saved in a look
+const kept = () => ({ edits: P.edits, thEdits: P.thEdits, thOff: P.thOff, denoise: P.denoise });
 function applyPreset(name) { setP(Object.assign(VC.params({ preset: name }), kept())); }
 function diff() {
   const base = VC.params({ preset: P.preset }), out = { preset: P.preset };
@@ -327,6 +329,7 @@ function recipe() {
   if (Object.keys(P.edits || {}).length) d.edits = P.edits;
   if (Object.keys(P.thEdits || {}).length) d.thEdits = P.thEdits;
   if ((P.thOff || []).length) d.thOff = P.thOff;
+  if (P.denoise && P.denoise !== "auto") d.denoise = P.denoise;
   return d;
 }
 $("undo").onclick = () => { if (!hist.length) return; fut.push(snap()); restore(hist.pop()); };
@@ -391,6 +394,7 @@ function build() {
   seg($("after"), "after", [["live", "Live"], ["settle", "Settle"], ["breathe", "Breathe"]]);
   seg($("fillers"), "fillers", [["hide", "Hidden"], ["show", "Shown"]]);
   seg($("cards"), "cards", [["0", "Off"], ["1", "Checked terms"]]);
+  seg($("denoise"), "denoise", [["off", "Original"], ["light", "Light"], ["full", "Full"]]);
   DIRECTIONS.forEach((d) => {
     const b = document.createElement("button"); b.className = "chip"; b.textContent = d.name; b.dataset.dir = d.name;
     b.onclick = () => setP(Object.assign({ after: "live" }, d.v)); $("directions").appendChild(b);
@@ -416,7 +420,7 @@ function syncUI() {
   const dir = DIRECTIONS.find((d) => P.after === "live" && Object.entries(d.v).every(([k, v]) => Math.abs((+P[k] || 0) - v) < 0.001));
   document.querySelectorAll("#directions [data-dir]").forEach((b) => b.classList.toggle("on", !!dir && b.dataset.dir === dir.name));
   $("dirNote").textContent = dir ? dir.note : ["linger", "ripple", "sway", "shimmer", "glow"].some((k) => +P[k] > 0) ? "Your own mix." : "";
-  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers); on("cards", String(+P.cards || 0));
+  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers); on("cards", String(+P.cards || 0)); syncSound();
   $("flHelp").textContent = P.fillers === "show" ? "Shown in the quiet color, timed to the moment they are spoken." : "Left out of the captions; the words close up and the typing pauses while they are spoken.";
   if (data && P.fillers !== shownFillers) renderWords();
   const edited = Object.keys(diff()).length > 1;
@@ -988,6 +992,43 @@ $("thumbDrive").onclick = async () => {
   }
 };
 
+// ---------- sound: Claude makes two noise-reduced copies of each recording (Listening copies/<id>.light.m4a and .full.m4a, with
+// the measured noise and the recommended level in their descriptions). The switch plays one of them or the original; the video
+// gets the same choice. P.denoise: "auto" (= the recommended level), "off", "light" or "full".
+let CLEAN = {}, REC = "off", soundLevel = null;
+const soundUrls = {};
+const LEVEL_NAME = { off: "Original", light: "Light", full: "Full" };
+function wantLevel() {
+  const l = P.denoise && P.denoise !== "auto" ? P.denoise : REC;
+  return l !== "off" && !CLEAN[l] ? "off" : l;
+}
+function syncSound() {
+  const have = Object.keys(CLEAN).length, want = wantLevel();
+  document.querySelectorAll("#denoise [data-v]").forEach((b) => {
+    b.classList.toggle("on", have ? b.dataset.v === want : b.dataset.v === "off");
+    b.disabled = !have && b.dataset.v !== "off";
+    b.classList.toggle("rec", !!have && b.dataset.v === REC);
+  });
+  const info = (CLEAN[REC] || CLEAN.full || CLEAN.light || {}).info || {};
+  $("soundNote").textContent = !have
+    ? "Noise reduction appears here once Claude has made cleaned copies of this recording, on its next processing run."
+    : `${info.snr == null ? "" : info.snr < 8 ? "Loud background noise. " : info.snr < 16 ? "Some background noise. " : "Little background noise. "}`
+      + `The dot marks the recommended level${REC === "off" ? " (the original)" : ""}. The video uses the same sound.`;
+  if (ready && want !== soundLevel) setSound(want);
+}
+async function setSound(level) {
+  soundLevel = level;
+  const id = level === "off" ? CAP.listen || AID : CLEAN[level].id;
+  try {
+    if (!soundUrls[level]) soundUrls[level] = URL.createObjectURL(await D.getBlob(id, "audio/mp4"));
+    if (soundLevel !== level) return;
+    const t = au.currentTime || 0, playing = !au.paused;
+    if (au.src === soundUrls[level]) return;
+    au.src = soundUrls[level];
+    au.addEventListener("loadedmetadata", () => { au.currentTime = Math.min(t, au.duration || t); if (playing) au.play().catch(() => {}); }, { once: true });
+  } catch (e) { toast("Couldn't load the audio: " + e.message, 5200); }
+}
+
 // ---------- looks, render requests (shared storage when available, this device otherwise)
 function toast(msg, ms = 2600, action) {
   const t = $("toast"); t.textContent = msg;
@@ -1141,7 +1182,14 @@ async function boot() {
     CAP = await D.getJson(f[0].id); base = CAP.data; rev = CAP.rev || 1;
     document.title = (CAP.title || "Studio") + " · Studio"; $("title").textContent = CAP.title || "Studio";
     // audio: Claude's small listening copy when there is one, else the original recording
-    D.getBlob(CAP.listen || AID, "audio/mp4").then((b) => { au.src = URL.createObjectURL(b); }).catch((e) => toast("Couldn't load the audio: " + e.message, 5200));
+    const cf = await D.list(`(name = '${D.quote(AID + ".light.m4a")}' or name = '${D.quote(AID + ".full.m4a")}') and trashed = false`, "id,name,description").catch(() => []);
+    cf.forEach((f) => { const lv = f.name.split(".").slice(-2, -1)[0]; if (!CLEAN[lv]) CLEAN[lv] = { id: f.id, info: D.meta(f.description) }; });
+    REC = ((CLEAN.full || CLEAN.light || {}).info || {}).rec;
+    if (!REC && cap && (CLEAN.full || CLEAN.light)) {  // copies uploaded without descriptions: the noise reading is in library.json
+      try { const lf2 = await D.list(`'${cap}' in parents and name = 'library.json' and trashed = false`, "id");
+        if (lf2.length) { const it = ((await D.getJson(lf2[0].id)).items || {})[AID] || {}; if (it.noise) { REC = it.noise.rec; ["full", "light"].forEach((l) => { if (CLEAN[l]) CLEAN[l].info = Object.assign({}, it.noise, CLEAN[l].info); }); } } } catch (e) {}
+    }
+    REC = REC || "off";
     studioId = await D.ensureSub(inbox, "Studio", "The caption studio's saved looks, word corrections and render requests. Claude reads these.");
     const [ef, lf, tf] = await Promise.all([
       D.list(`'${studioId}' in parents and name = '${D.quote(AID + ".edits.json")}' and trashed = false`, "id,modifiedTime"),
@@ -1164,6 +1212,7 @@ async function boot() {
     hist = []; fut = []; syncUI();
     applyFixes(); renderLabel(); rebuild(); whenBuilt(renderWords);
     ready = true; state(ef.length ? "Saved" : "");
+    syncSound();  // loads the audio at the chosen (or recommended) level
   } catch (e) {
     if (e instanceof D.AuthError) return block(`Google sign-in expired. <a href="./#library">Open the Library</a> to sign in again.`);
     block(`Couldn't open this recording: ${escH(e.message || String(e))}. <a href="./#library">Back to the Library</a>.`);
@@ -1179,7 +1228,7 @@ requestAnimationFrame(frame);
 setTimeout(() => ($("hint").style.opacity = 0), 6000);
 boot();
 window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, get follow() { return follow; }, get GL() { return GL; }, get scene() { return scene; },
-  get TH() { return TH; }, get tscene() { return tscene; }, openWord, openTerm, openThumbWord, thumbFile, flush };
+  get TH() { return TH; }, get tscene() { return tscene; }, get soundLevel() { return soundLevel; }, get REC() { return REC; }, openWord, openTerm, openThumbWord, thumbFile, flush };
 </script>
 </body>
 </html>

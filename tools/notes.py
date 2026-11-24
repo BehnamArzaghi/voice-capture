@@ -14,6 +14,7 @@
         hand a run's files to Drive in one step: updates Captions/library.json; with --drive-dir writes into a Drive for desktop
         folder, otherwise prints one upload plan for the Drive connector
   notes.py render WORK/ID EDITS.json               render the requested video (+ .srt) with the studio's look
+  notes.py clean WORK/ID AUDIO                    noise-reduced listening copies (light, full) for a recording already transcribed
   notes.py thumb WORK/ID EDITS.json [--glossary glossary.json]   the studio's thumbnail as a PNG (3840 x 2160 for 16:9)
   notes.py set WORK/ID key=value ...               set captions fields before upload (listen=<Drive id of the listening copy>)
   notes.py ref FILE                                file reference for the Drive connector's create_file (no bytes through chat)
@@ -26,6 +27,7 @@ Drive layout (inside "Voice Notes Inbox"):
   Captions/library.json       {items: {ID: {rev, title, duration, notion, videoId, videoAt, srtId}}}: what the Library shows
   Captions/glossary.json      copy of the Notion Glossary (themes, colors, terms)
   Listening copies/ID.m4a     small copy that Notion's audio player fetches (folder shared by link)
+  Listening copies/ID.light.m4a, ID.full.m4a   noise-reduced copies; description {snr, rec, level}; the studio's Sound switch plays them
   Studio/ID.edits.json        written by the app: {base, params, fixes, render, glossary, thumb}
   Studio/ID.thumbnail.png     the studio's thumbnail, when saved to Drive from the Thumbnail tab
 """
@@ -64,6 +66,37 @@ def listening_copy(src, dest, dur):
     return False
 
 
+def _pcm16(src):
+    """SRC as 16 kHz mono float samples (for measuring noise)."""
+    import numpy as np
+    raw = subprocess.run(["ffmpeg", "-v", "error", "-i", src, "-ac", "1", "-ar", "16000", "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    return np.frombuffer(raw, np.int16).astype(np.float32) / 32768.0
+
+
+def _kbps(dur):
+    for kbps in (48, 32):
+        if dur * kbps * 1000 / 8 < NOTION_MAX * 0.97:
+            return kbps
+    return 32
+
+
+def make_clean_copies(src, d, aid, dur, words=None):
+    """Noise-reduced listening copies of SRC at both levels (D/<aid>.light.m4a, D/<aid>.full.m4a), plus D/clean.json with the
+    measured noise and the recommended level. The studio switches between these and the original; Notion gets the recommended one."""
+    sys.path.insert(0, HERE)
+    import vc
+    snr, rec = vc.noise_level(_pcm16(src), words)
+    kb = _kbps(dur)
+    files = {}
+    for level in ("light", "full"):
+        dest = f"{d}/{aid}.{level}.m4a"
+        vc.clean_audio(src, level, dest, ["-ac", "1", "-ar", "24000", "-c:a", "aac", "-b:a", f"{kb}k", "-movflags", "+faststart"])
+        files[level] = dest
+    info = {"snr": snr, "rec": rec, "at": int(time.time() * 1000)}
+    json.dump(info, open(f"{d}/clean.json", "w"))
+    return info, files
+
+
 def texts(words):
     verb = " ".join(w["w"].strip() for w in words)
     clean = " ".join((w.get("wh") or w["w"]).strip() for w in words if not w.get("fl"))
@@ -92,7 +125,15 @@ def cmd_prepare(a):
     os.makedirs(d, exist_ok=True)
     prompt = vocab_prompt(a.vocab)
     t0 = time.time()
-    sh(sys.executable, VC, "run", a.audio, "--out", d, *(["--prompt", prompt] if prompt else []))
+    sys.path.insert(0, HERE)
+    import vc
+    src = a.audio
+    est, est_rec = vc.noise_level(_pcm16(a.audio))
+    if est_rec == "full":  # very noisy (car, wind): Whisper and the voice analysis work on the cleaned sound
+        src = vc.clean_audio(a.audio, "full", f"{d}/transcribe_src.flac", ["-ac", "1", "-c:a", "flac"])
+    sh(sys.executable, VC, "run", src, "--out", d, *(["--prompt", prompt] if prompt else []))
+    if src != a.audio:  # the video's master stays the original; the studio and renders pick the cleaning level
+        sh("ffmpeg", "-v", "error", "-y", "-i", a.audio, "-vn", "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "48000", "-ac", "2", "-c:a", "flac", f"{d}/master.flac")
     data = json.load(open(f"{d}/data.json"))
     words = data["words"]
     verb, clean = texts(words)
@@ -100,12 +141,17 @@ def cmd_prepare(a):
     open(f"{d}/clean.txt", "w").write(clean)
     dur = data.get("duration") or words[-1]["e"]
     fits = listening_copy(a.audio, f"{d}/listen.m4a", dur)
-    meta = {"audioId": a.id, "title": a.title, "recordedAt": a.recorded, "duration": dur, "rev": 1, "listen": None, "video": None, "remap": None}
+    noise, cfiles = make_clean_copies(a.audio, d, a.id, dur, [w for w in words if not w.get("fl")])
+    meta = {"audioId": a.id, "title": a.title, "recordedAt": a.recorded, "duration": dur, "rev": 1, "listen": None, "video": None, "remap": None,
+            "noise": {"snr": noise["snr"], "rec": noise["rec"]}}
     write_captions(d, meta, data)
     out = {"dir": d, "words": len(words), "fillers": sum(1 for w in words if w.get("fl")), "clean_words": len(clean.split()),
            "duration_min": round(dur / 60, 2), "minutes_taken": round((time.time() - t0) / 60, 1),
            "captions_ref": ref(f"{d}/captions.json"), "captions_bytes": os.path.getsize(f"{d}/captions.json"),
            "listen_ref": ref(f"{d}/listen.m4a"), "listen_bytes": os.path.getsize(f"{d}/listen.m4a"), "listen_fits_notion": fits,
+           "noise": noise, "transcribed_cleaned": src != a.audio,
+           "clean_files": {k: os.path.basename(v) for k, v in cfiles.items()},
+           "notion_audio": "listen.m4a" if noise["rec"] == "off" else os.path.basename(cfiles[noise["rec"]]),
            "description": describe(meta)}
     if os.path.exists(f"{d}/timing_report.json"):
         out["timing_check"] = json.load(open(f"{d}/timing_report.json"))  # "check": stretches (s) left unverified, worth a look in the studio
@@ -162,17 +208,50 @@ def _tmp(text):
     return p
 
 
+def cmd_clean(a):
+    """Noise reduction for a recording that was already transcribed: two cleaned listening copies, without touching its captions."""
+    d = a.dir
+    cap = json.load(open(f"{d}/captions.json"))
+    aid = cap.get("audioId") or os.path.basename(d)
+    words = [w for w in cap["data"]["words"] if not w.get("fl")]
+    info, files = make_clean_copies(a.audio, d, aid, cap.get("duration") or words[-1]["e"], words)
+    print(json.dumps({"noise": info, "files": {k: {"name": os.path.basename(v), "ref": ref(v), "mb": round(os.path.getsize(v) / 1e6, 2)} for k, v in files.items()},
+                      "next": "upload both to Listening copies (or pass them to publish with --listening)"}, indent=1))
+
+
+def render_audio(d, params, cap):
+    """The video's sound at the noise-reduction level chosen in the studio ("auto" = the recommended one); None = master.flac as is."""
+    level = (params or {}).get("denoise") or "auto"
+    if level == "auto":
+        info = json.load(open(f"{d}/clean.json")) if os.path.exists(f"{d}/clean.json") else None
+        if not info:
+            sys.path.insert(0, HERE)
+            import vc
+            snr, rec = vc.noise_level(_pcm16(f"{d}/master.flac"), [w for w in cap["data"]["words"] if not w.get("fl")])
+            info = {"snr": snr, "rec": rec}
+        level = info["rec"]
+    if level not in ("light", "full"):
+        return None, "off"
+    sys.path.insert(0, HERE)
+    import vc
+    dest = f"{d}/master.{level}.flac"
+    if not os.path.exists(dest) or os.path.getmtime(dest) < os.path.getmtime(f"{d}/master.flac"):
+        vc.clean_audio(f"{d}/master.flac", level, dest, ["-ar", "48000", "-ac", "2", "-c:a", "flac"])
+    return dest, level
+
+
 def cmd_render(a):
     d = a.dir
     E = json.load(open(a.edits))
     req = E.get("render") or {}
     params = req.get("params") or E.get("params") or {}
     json.dump(params, open(f"{d}/params.json", "w"))
-    sh(sys.executable, VC, "render", d, "--params", f"{d}/params.json")
+    audio, level = render_audio(d, params, json.load(open(f"{d}/captions.json")))
+    sh(sys.executable, VC, "render", d, "--params", f"{d}/params.json", *(["--audio", audio] if audio else []))
     sh(sys.executable, VC, "srt", d)
     cap = json.load(open(f"{d}/captions.json"))
     meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
-    meta["video"] = {"at": req.get("at") or int(time.time() * 1000), "params": params}
+    meta["video"] = {"at": req.get("at") or int(time.time() * 1000), "params": params, "denoise": level}
     write_captions(d, meta, cap["data"])
     mp4 = f"{d}/voicecap_full.mp4"
     print(json.dumps({"mp4_ref": ref(mp4), "mp4_mb": round(os.path.getsize(mp4) / 1e6, 1), "srt_ref": ref(f"{d}/captions.srt"),
@@ -386,20 +465,32 @@ def cmd_publish(a):
         files.append((c, f"{aid}.captions.json", describe(meta)))
     for x in a.extra or []:
         files.append((x, os.path.basename(x), None))
+    listening = []
+    for x in a.listening or []:  # <id>.light.m4a / <id>.full.m4a, described from clean.json beside them
+        cj = os.path.join(os.path.dirname(os.path.abspath(x)), "clean.json")
+        info = json.load(open(cj)) if os.path.exists(cj) else {}
+        name = os.path.basename(x)
+        listening.append((x, name, json.dumps(dict(info, level=name.rsplit(".", 2)[-2]), separators=(",", ":"))))
+        aid = name.split(".")[0]
+        if aid in lib["items"] and info:
+            lib["items"][aid]["noise"] = {"snr": info.get("snr"), "rec": info.get("rec")}
     lib["updatedAt"] = int(time.time() * 1000)
     out_lib = os.path.join(WORK, "library.json") if not cap_dir else lib_path
     os.makedirs(os.path.dirname(out_lib), exist_ok=True)
     tmp = out_lib + ".tmp"; json.dump(lib, open(tmp, "w"), ensure_ascii=False, separators=(",", ":")); os.replace(tmp, out_lib)
     if cap_dir:
         os.makedirs(cap_dir, exist_ok=True)
-        for src, name, _ in files:
-            dst = os.path.join(cap_dir, name)
-            if os.path.abspath(src) != os.path.abspath(dst):
-                shutil.copyfile(src, dst + ".tmp"); os.replace(dst + ".tmp", dst)
+        for folder, group in ((cap_dir, files), (os.path.join(a.drive_dir, "Listening copies"), listening)):
+            os.makedirs(folder, exist_ok=True)
+            for src, name, _ in group:
+                dst = os.path.join(folder, name)
+                if os.path.abspath(src) != os.path.abspath(dst):
+                    shutil.copyfile(src, dst + ".tmp"); os.replace(dst + ".tmp", dst)
         print(json.dumps({"written_to": cap_dir, "files": [n for _, n, _ in files] + ["library.json"], "library_items": len(lib["items"])}, indent=1))
         return
     plan = [{"name": n, "ref": ref(src), **({"description": d} if d else {})} for src, n, d in files]
     plan.append({"name": "library.json", "ref": ref(out_lib)})
+    plan += [{"folder": "Listening copies", "name": n, "ref": ref(src), "description": d} for src, n, d in listening]
     print(json.dumps({"folder": "Captions", "upload": plan,
                       "then": "create each file (application/json or text/plain, no conversion), then trash the older file with the same name; descriptions are optional now that library.json carries them"}, indent=1, ensure_ascii=False))
 
@@ -445,6 +536,7 @@ def main():
     x = sp.add_parser("apply"); x.add_argument("dir"); x.add_argument("edits"); x.add_argument("--vocab")
     r = sp.add_parser("render"); r.add_argument("dir"); r.add_argument("edits")
     f = sp.add_parser("ref"); f.add_argument("file")
+    cl = sp.add_parser("clean"); cl.add_argument("dir"); cl.add_argument("audio")
     tb = sp.add_parser("thumb"); tb.add_argument("dir"); tb.add_argument("edits"); tb.add_argument("--glossary"); tb.add_argument("--out")
     rs = sp.add_parser("restore"); rs.add_argument("audio"); rs.add_argument("captions")
     st = sp.add_parser("set"); st.add_argument("dir"); st.add_argument("pairs", nargs="+")
@@ -452,7 +544,8 @@ def main():
     gl = sp.add_parser("glossary"); gl.add_argument("rows"); gl.add_argument("-o", "--out", default=os.path.join(WORK, "glossary.json"))
     tg = sp.add_parser("tag"); tg.add_argument("captions"); tg.add_argument("glossary"); tg.add_argument("--vocab")
     pb = sp.add_parser("publish"); pb.add_argument("captions", nargs="*"); pb.add_argument("--extra", nargs="*", help="other files for Captions (glossary.json, vocabulary.txt)")
-    pb.add_argument("--library", help="current library.json (downloaded from Captions)"); pb.add_argument("--drive-dir", help="local Google Drive for desktop copy of Voice Notes Inbox")
+    pb.add_argument("--library", help="current library.json (downloaded from Captions)")
+    pb.add_argument("--listening", nargs="*", help="noise-reduced copies (<id>.light.m4a, <id>.full.m4a) for Listening copies"); pb.add_argument("--drive-dir", help="local Google Drive for desktop copy of Voice Notes Inbox")
     a = ap.parse_args()
     if a.cmd == "setup":
         sh(sys.executable, VC, "setup")
@@ -466,6 +559,8 @@ def main():
         cmd_render(a)
     elif a.cmd == "thumb":
         cmd_thumb(a)
+    elif a.cmd == "clean":
+        cmd_clean(a)
     elif a.cmd == "restore":
         cmd_restore(a)
     elif a.cmd == "set":

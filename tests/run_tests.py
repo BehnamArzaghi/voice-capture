@@ -2,7 +2,7 @@
 """Browser tests for the Library (index.html) and the caption studio (studio.html).
 
   python3 tests/run_tests.py            all tests; screenshots go to tests/shots/
-  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, cards, requests, thumb)
+  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, cards, requests, thumb, sound)
 
 Needs Playwright for Python and the Chrome that `tools/vc.py setup` installs. Exits non-zero when a check fails.
 """
@@ -223,7 +223,45 @@ async def t_thumb(p, base):
     H.EDITS = ""
 
 
-GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "cards": t_cards, "requests": t_requests, "thumb": t_thumb}
+async def t_sound(p, base):
+    for name, w, h, mob in (("desk", 1440, 900, False), ("phone", 390, 844, True)):
+        H.GETS.clear(); H.SAVES.clear()
+        b, pg, errs = await open_studio(p, base, w, h, mob)
+        await pg.wait_for_timeout(800)
+        C(await pg.evaluate("__studio.REC") == "full" and await pg.evaluate("__studio.soundLevel") == "full", f"sound {name}: the recommended level plays by default")
+        C(any(x.endswith("/CLEANFULL") for x in H.GETS) and not any(x.endswith("/" + H.AID) for x in H.GETS), f"sound {name}: only the cleaned copy is downloaded", H.GETS)
+        await pg.click("#tabs [data-t=voice]"); await pg.wait_for_timeout(200)
+        C(await pg.eval_on_selector_all("#denoise .rec", "e => e.map(x => x.dataset.v)") == ["full"], f"sound {name}: the recommended level is marked")
+        await (await pg.query_selector("#denoise")).scroll_into_view_if_needed(); await pg.screenshot(path=f"{H.OUT}/sound_{name}.png")
+        await pg.evaluate("() => { const a = document.getElementById('au'); a.currentTime = 20; }"); await pg.wait_for_timeout(200)
+        await pg.click("#denoise [data-v=off]"); await pg.wait_for_timeout(900)
+        st = await pg.evaluate("() => ({l: __studio.soundLevel, t: document.getElementById('au').currentTime, d: __studio.P.denoise})")
+        C(st["l"] == "off" and abs(st["t"] - 20) < 0.6 and st["d"] == "off", f"sound {name}: Original switches the sound and keeps the place", st)
+        await pg.click("#denoise [data-v=light]"); await pg.wait_for_timeout(700)
+        C(await pg.evaluate("__studio.soundLevel") == "light", f"sound {name}: Light plays the light copy")
+        await pg.click("#tabs [data-t=look]"); await pg.click("#presets .preset[data-p=Poster]"); await pg.wait_for_timeout(300)
+        C(await pg.evaluate("__studio.P.denoise") == "light", f"sound {name}: changing the look keeps the sound choice")
+        await pg.evaluate("window.__studio.flush()"); await pg.wait_for_timeout(400)
+        body = next((s for s in reversed(H.SAVES) if '"audioId"' in s), "")
+        doc = json.loads(body[body.index('{"v":1,"audioId"'):body.rindex("}") + 1]) if body else {}
+        C((doc.get("params") or {}).get("denoise") == "light", f"sound {name}: the choice is saved with the recording", doc.get("params"))
+        C(not errs, f"sound {name}: no page errors", errs); await b.close()
+    lib = os.path.join(tempfile.mkdtemp(), "library.json")
+    json.dump({"v": 1, "items": {H.AID: {"rev": 1, "title": "x", "noise": {"snr": 12.0, "rec": "light"}}}}, open(lib, "w"))
+    H.CLEANDESC = False; H.LIBJSON = lib
+    b, pg, errs = await open_studio(p, base); await pg.wait_for_timeout(600)
+    C(await pg.evaluate("[__studio.REC, __studio.soundLevel]") == ["light", "light"], "sound: the noise reading can come from library.json")
+    await b.close(); H.CLEANDESC = True; H.LIBJSON = ""
+    H.CLEANCOPIES = False
+    b, pg, errs = await open_studio(p, base)
+    await pg.click("#tabs [data-t=voice]"); await pg.wait_for_timeout(300)
+    st = await pg.evaluate("() => ({l: __studio.soundLevel, dis: [...document.querySelectorAll('#denoise button')].map(b => b.disabled)})")
+    C(st == {"l": "off", "dis": [False, True, True]}, "sound: without cleaned copies the original plays and Light and Full wait", st)
+    C(not errs, "sound: no page errors without copies", errs); await b.close()
+    H.CLEANCOPIES = True
+
+
+GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "cards": t_cards, "requests": t_requests, "thumb": t_thumb, "sound": t_sound}
 
 
 async def main(names):

@@ -30,6 +30,7 @@
     // live energy (0 = off): how typed letters keep answering the voice after they land
     linger: 0, ripple: 0, sway: 0, shimmer: 0, glow: 0,
     fillers: "hide", edits: {}, thEdits: {}, thOff: [],
+    denoise: "auto",  // the recording's sound: "auto" (the recommended level), "off", "light" or "full" (noise-reduced copies)
     cards: 0,  // 1 = a small card with a glossary term's definition at its first appearance (verified terms)
   };
   const PRESETS = {

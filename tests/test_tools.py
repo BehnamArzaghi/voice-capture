@@ -37,6 +37,25 @@ C(out.returncode == 0 and lib["items"][FX["aid"]]["title"] == FX["title"], "publ
 C(os.path.exists(os.path.join(d, "Captions", FX["aid"] + ".captions.json")) and os.path.exists(os.path.join(d, "Captions", "glossary.json")),
   "publish: files written into the synced Captions folder")
 
+# noise reduction: both cleaned copies, the measured noise, and the upload plan for Listening copies
+d2 = tempfile.mkdtemp()
+info, files = notes.make_clean_copies(FX["audio"], d2, FX["aid"], FX["duration"], [w for w in cap["data"]["words"] if not w.get("fl")])
+C(set(files) == {"light", "full"} and all(os.path.getsize(f) > 10000 for f in files.values()) and info["rec"] in ("off", "light", "full"),
+  "clean: light and full copies made, with a recommended level", info)
+out = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", "notes.py"), "publish", FX["captions"], "--listening", *files.values()],
+                     capture_output=True, text=True, env=dict(os.environ, VN_WORK=d2))
+plan = json.loads(out.stdout or "{}").get("upload", [])
+lp = [x for x in plan if x.get("folder") == "Listening copies"]
+C(len(lp) == 2 and all(json.loads(x["description"])["level"] in ("light", "full") for x in lp), "clean: publish plans both copies for Listening copies", out.stderr[-300:])
+import numpy as np, vc  # noqa: E402
+rng = np.random.default_rng(1); sr = 16000; x = rng.normal(0, 0.01, sr * 20).astype(np.float32)
+words = [{"s": t, "e": t + 0.5} for t in np.arange(0.5, 19, 1.0)]
+for w in words: x[int(w["s"] * sr):int(w["e"] * sr)] += np.sin(np.arange(int(0.5 * sr)) * 2 * np.pi * 220 / sr).astype(np.float32) * 0.3
+snr, rec = vc.noise_level(x, words)
+C(18 < snr < 30 and rec == "off", "clean: noise measured between words", (snr, rec))
+x2 = x + rng.normal(0, 0.15, len(x)).astype(np.float32)
+C(vc.noise_level(x2, words)[1] == "full", "clean: loud noise calls for Full", vc.noise_level(x2, words))
+
 # Notion payloads
 C(notion_batch.value("multi_select", ["B"], {"multi_select": [{"name": "A"}]}) == {"multi_select": [{"name": "A"}, {"name": "B"}]},
   "notion: '+' adds to a multi-select")

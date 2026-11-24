@@ -15,7 +15,7 @@ Behnam Arzaghi's voice recorder and caption studio. It is an iPhone web app on G
 | `engine.js` | Caption engine (video frames, and thumbnails with `buildThumb`/`drawThumb`). The studio and the renderers share it, so changes show in both |
 | `shared.js` | `VCDrive`: Drive helpers used by both pages |
 | `sw.js` | Service worker. **Bump `CACHE` (vc-shell-vN) whenever a shipped file changes** |
-| `tools/notes.py` | Pipeline commands: prepare, apply, retime, glossary, tag, publish, render, thumb (see its docstring) |
+| `tools/notes.py` | Pipeline commands: prepare, apply, retime, clean, glossary, tag, publish, render, thumb (see its docstring) |
 | `tools/vc.py` | Analysis, alignment and rendering (headless Chrome running `engine.js`) |
 | `tools/notion_batch.py` | Many Notion updates in one command (needs `NOTION_TOKEN`; desktop runs) |
 | `tests/` | Browser tests (Playwright) and pipeline checks, on a synthetic recording |
@@ -24,7 +24,7 @@ Behnam Arzaghi's voice recorder and caption studio. It is an iPhone web app on G
 ```bash
 python3 tests/test_tools.py        # pipeline checks, a few seconds
 python3 tests/run_tests.py         # browser tests, about 1 minute; screenshots in tests/shots/
-python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, cards, requests, thumb
+python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, cards, requests, thumb, sound
 ```
 - The tests serve the repo locally and stand in for Google Drive with local files. They need Playwright for Python and a Chrome or Chromium: `python3 tools/notes.py setup` installs them, or `pip install playwright && playwright install chromium`.
 - Look at the screenshots for anything visual. Check both a phone viewport (390×844) and a desktop one (1440×900).
@@ -45,6 +45,7 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
   - `params.thEdits` maps a word index to a theme name, with `""` for no theme. Older edits use numeric indices.
   - `params.thOff` lists hidden themes. Like `edits` and `thEdits`, it belongs to the recording and is never saved in a look.
 - `Studio/<id>.thumbnail.png`: the thumbnail, saved from the Thumbnail tab.
+- `Listening copies/<id>.light.m4a`, `<id>.full.m4a`: noise-reduced copies (`notes.py clean`, or made by `prepare`). Each description holds `{snr, rec, level}`, and `library.json` items repeat `noise`. `params.denoise` is "auto" (= rec), "off", "light" or "full". It belongs to the recording (in `KEEP`), and renders use it (`render_audio`).
 - `Studio/looks.json`: saved looks.
 
 ## Where things live
@@ -60,5 +61,6 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
 - iOS web apps can't record with the screen locked. Keep the screen-awake behavior.
 - The standard setup is cloud only. Drive and Notion go through Claude's connectors, because the cloud workspace's shell can't reach googleapis.com or api.notion.com. Don't introduce tokens, local installs or machine-specific steps; Behnam wants it hardware-independent and simple. `--drive-dir` and `notion_batch.py` are an optional speed-up on a computer, and nothing depends on them.
 - The nightly scheduled task runs a cheap gate first: a few Drive searches compared against `Captions/library.json`. It does real work only when there is some. Keep `library.json` current, through `notes.py publish`, so the gate stays accurate.
+- The noise model is vendored at `tools/models/sh.rnnn` (GregorR/rnnoise-models, not subject to copyright), so cleaning needs no download.
 - The Drive connector downloads at most 10 MB per file; recordings over 9 MB also arrive as `Parts/`.
 - Theme colors come from Notion color names (`themeColors`). `engine.js` turns each name into a color that reads on the chosen palette.

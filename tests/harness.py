@@ -20,6 +20,9 @@ EDITS = os.environ.get("EDITS", "")
 LIBJSON = os.environ.get("LIBJSON", "")  # optional Captions/library.json for the Library tests
 OUT = os.path.join(HERE, "shots"); os.makedirs(OUT, exist_ok=True)
 SAVES = []  # bodies of every write the page sends to "Drive"
+GETS = []   # paths of every file the page downloads from "Drive"
+CLEANCOPIES = True  # whether Drive has noise-reduced copies of the recording
+CLEANDESC = True    # whether those copies carry the noise reading in their descriptions (else it comes from library.json)
 # the Library's recordings: (id, captions title or None = not processed yet, duration, put the summary in the description?)
 LIB = [(AID, json.load(open(CAPS)).get("title"), round(json.load(open(CAPS))["duration"]), True),
        ("LIBONLY000000000000000000000000", "Summary only in library.json", 300, False),
@@ -48,8 +51,13 @@ async def drive(route):
         if "name = 'Captions'" in q: return await files([{"id": "CAPS", "name": "Captions"}])
         if "name = 'Studio'" in q: return await files([{"id": "STUDIO", "name": "Studio"}])
         if ".captions.json" in q: return await files([{"id": "CAPFILE", "name": AID + ".captions.json"}])
+        if "name = 'library.json'" in q: return await files([{"id": "LIBJSON", "name": "library.json"}] if LIBJSON else [])
         if "glossary.json" in q: return await files([{"id": "GLOSS", "name": "glossary.json"}] if os.path.exists(GLOSSF) else [])
         if ".edits.json" in q: return await files([{"id": "EDITS", "name": AID + ".edits.json"}] if EDITS else [])
+        if ".full.m4a" in q:  # noise-reduced copies (the fixture's tone stands in for them)
+            desc = lambda lv: json.dumps({"snr": 3.2, "rec": "full", "level": lv}) if CLEANDESC else ""
+            return await files([{"id": "CLEANFULL", "name": AID + ".full.m4a", "description": desc("full")},
+                                {"id": "CLEANLIGHT", "name": AID + ".light.m4a", "description": desc("light")}] if CLEANCOPIES else [])
         if "mimeType contains 'audio/'" in q:
             return await files([{"id": i, "name": (t or "2026-01-01 Walk") + ".m4a", "createdTime": "2026-01-01T16:07:00Z",
                                  "appProperties": {"durationSec": str(d)}} for i, t, d, _ in LIB])
@@ -59,8 +67,10 @@ async def drive(route):
             if LIBJSON: fs.append({"id": "LIBJSON", "name": "library.json"})
             return await files(fs)
         return await files([])
+    GETS.append(p.path)
     for key, path, typ in (("/CAPFILE", CAPS, "application/json"), ("/GLOSS", GLOSSF, "application/json"), ("/EDITS", EDITS, "application/json"),
-                           ("/LIBJSON", LIBJSON, "application/json"), ("/" + AID, AUDIO, "audio/mp4")):
+                           ("/LIBJSON", LIBJSON, "application/json"), ("/" + AID, AUDIO, "audio/mp4"),
+                           ("/CLEANFULL", AUDIO, "audio/mp4"), ("/CLEANLIGHT", AUDIO, "audio/mp4")):
         if path and p.path.endswith(key): return await route.fulfill(path=path, content_type=typ)
     return await route.fulfill(status=404, json={"error": {"message": "not found"}})
 
