@@ -925,6 +925,8 @@ async function boot() {
     let p = null;
     if (ef.length) {
       editsId = ef[0].id; const E = await D.getJson(editsId); p = E.params || null; renderReq = E.render || null; GL = Array.isArray(E.glossary) ? E.glossary : [];
+      // Claude applies glossary requests in Notion before it refreshes glossary.json, so requests older than that copy are done
+      if (GLOSS && GLOSS.updatedAt) GL = GL.filter((g) => !(g.at <= GLOSS.updatedAt));
       if ((E.base || 1) >= rev) fixes = E.fixes || {};
       else if (p && CAP.remap && CAP.remap.from === (E.base || 1)) { p.edits = remapKeys(p.edits, CAP.remap.map); p.thEdits = remapKeys(p.thEdits, CAP.remap.map); }
     }
