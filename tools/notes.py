@@ -10,6 +10,9 @@
   notes.py retime AUDIO CAPTIONS.json              fix captions that drift from the audio (same words and rev; studio edits still fit)
   notes.py glossary ROWS.json [-o glossary.json]    Notion Glossary rows -> glossary.json (themes, colors, terms)
   notes.py tag CAPTIONS.json glossary.json [--vocab vocabulary.txt]   color glossary terms by theme; prints themes for the Notion row
+  notes.py publish CAPTIONS.json ... [--extra FILE ...] [--library library.json] [--drive-dir DIR]
+        hand a run's files to Drive in one step: updates Captions/library.json; with --drive-dir writes into a Drive for desktop
+        folder, otherwise prints one upload plan for the Drive connector
   notes.py render WORK/ID EDITS.json               render the requested video (+ .srt) with the studio's look
   notes.py set WORK/ID key=value ...               set captions fields before upload (listen=<Drive id of the listening copy>)
   notes.py ref FILE                                file reference for the Drive connector's create_file (no bytes through chat)
@@ -19,6 +22,8 @@ Drive layout (inside "Voice Notes Inbox"):
   Captions/ID.captions.json   written here: {v, audioId, title, recordedAt, duration, rev, listen, video, remap, data}
   Captions/ID.mp4, ID.srt     rendered on request
   Captions/vocabulary.txt     names and terms for the transcriber (grows from corrections)
+  Captions/library.json       {items: {ID: {rev, title, duration, notion, videoId, videoAt, srtId}}}: what the Library shows
+  Captions/glossary.json      copy of the Notion Glossary (themes, colors, terms)
   Listening copies/ID.m4a     small copy that Notion's audio player fetches (folder shared by link)
   Studio/ID.edits.json        written by the app: {base, params, fixes, render}
 """
@@ -333,6 +338,44 @@ def note_themes(stats):
             if s["occurrences"] >= 4 or (s["occurrences"] >= 3 and len(set(s["terms"])) >= 2)]
 
 
+def cmd_publish(a):
+    """Everything a run hands to Drive's Captions folder, in one step.
+    Updates library.json (the Library's summary of every captions file). With --drive-dir (a Google Drive for desktop copy of
+    "Voice Notes Inbox") it writes the files there and Drive syncs them as updates (the app reads files by name, newest first). Otherwise it prints a
+    compact upload plan for the Drive connector: create each file, then trash the previous copy with the same name."""
+    cap_dir = os.path.join(a.drive_dir, "Captions") if a.drive_dir else None
+    lib_path = a.library or (os.path.join(cap_dir, "library.json") if cap_dir else os.path.join(WORK, "library.json"))
+    lib = {"v": 1, "items": {}}
+    if os.path.exists(lib_path):
+        try: lib = json.load(open(lib_path)); lib.setdefault("items", {})
+        except ValueError: pass
+    files = []
+    for c in a.captions:
+        cap = json.load(open(c))
+        aid = cap.get("audioId") or os.path.basename(os.path.dirname(os.path.abspath(c)))
+        meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
+        lib["items"][aid] = dict(json.loads(describe(meta)), at=int(time.time() * 1000))
+        files.append((c, f"{aid}.captions.json", describe(meta)))
+    for x in a.extra or []:
+        files.append((x, os.path.basename(x), None))
+    lib["updatedAt"] = int(time.time() * 1000)
+    out_lib = os.path.join(WORK, "library.json") if not cap_dir else lib_path
+    os.makedirs(os.path.dirname(out_lib), exist_ok=True)
+    tmp = out_lib + ".tmp"; json.dump(lib, open(tmp, "w"), ensure_ascii=False, separators=(",", ":")); os.replace(tmp, out_lib)
+    if cap_dir:
+        os.makedirs(cap_dir, exist_ok=True)
+        for src, name, _ in files:
+            dst = os.path.join(cap_dir, name)
+            if os.path.abspath(src) != os.path.abspath(dst):
+                shutil.copyfile(src, dst + ".tmp"); os.replace(dst + ".tmp", dst)
+        print(json.dumps({"written_to": cap_dir, "files": [n for _, n, _ in files] + ["library.json"], "library_items": len(lib["items"])}, indent=1))
+        return
+    plan = [{"name": n, "ref": ref(src), **({"description": d} if d else {})} for src, n, d in files]
+    plan.append({"name": "library.json", "ref": ref(out_lib)})
+    print(json.dumps({"folder": "Captions", "upload": plan,
+                      "then": "create each file (application/json or text/plain, no conversion), then trash the older file with the same name; descriptions are optional now that library.json carries them"}, indent=1, ensure_ascii=False))
+
+
 def cmd_glossary(a):
     rows = json.load(open(a.rows))
     rows = rows.get("results", rows) if isinstance(rows, dict) else rows
@@ -379,6 +422,8 @@ def main():
     rt = sp.add_parser("retime"); rt.add_argument("audio"); rt.add_argument("captions")
     gl = sp.add_parser("glossary"); gl.add_argument("rows"); gl.add_argument("-o", "--out", default=os.path.join(WORK, "glossary.json"))
     tg = sp.add_parser("tag"); tg.add_argument("captions"); tg.add_argument("glossary"); tg.add_argument("--vocab")
+    pb = sp.add_parser("publish"); pb.add_argument("captions", nargs="*"); pb.add_argument("--extra", nargs="*", help="other files for Captions (glossary.json, vocabulary.txt)")
+    pb.add_argument("--library", help="current library.json (downloaded from Captions)"); pb.add_argument("--drive-dir", help="local Google Drive for desktop copy of Voice Notes Inbox")
     a = ap.parse_args()
     if a.cmd == "setup":
         sh(sys.executable, VC, "setup")
@@ -400,6 +445,8 @@ def main():
         cmd_glossary(a)
     elif a.cmd == "tag":
         cmd_tag(a)
+    elif a.cmd == "publish":
+        cmd_publish(a)
     elif a.cmd == "ref":
         print(ref(a.file))
 

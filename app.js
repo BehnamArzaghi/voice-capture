@@ -566,7 +566,8 @@
 
 
   // ---------------------------------------------------------------- Library: recordings in Drive, with the captions and notes Claude prepares
-  // Claude writes "Captions/<audio id>.captions.json" (+ .mp4/.srt when rendered) and puts a JSON summary in each file's description;
+  // Claude writes "Captions/<audio id>.captions.json" (+ .mp4/.srt when rendered) and a summary of each one in "Captions/library.json"
+  // (older runs put the summary in each file's Drive description instead; the newer of the two wins);
   // the studio writes "Studio/<audio id>.edits.json" (look, word corrections, render request).
   const D = window.VCDrive;
   let curTab = "record";
@@ -600,10 +601,20 @@
           studio ? D.list(`'${studio}' in parents and trashed = false`, "id,name,modifiedTime,description") : []]);
         const byId = (files, ext) => { const m = {}; for (const f of files) { const k = f.name.endsWith(ext) ? f.name.slice(0, -ext.length) : null; if (k && !m[k]) m[k] = f; } return m; };
         const caps = byId(capFiles, ".captions.json"), eds = byId(edFiles, ".edits.json");
+        const lf = capFiles.find((f) => f.name === "library.json");
+        let lib = {};
+        if (lf) { try { lib = (await D.getJson(lf.id)).items || {}; } catch (e) {} }
+        this.lib = lib;
         this.render(audio, caps, eds);
       } catch (e) {
         host.innerHTML = this.card(esc(e.message || String(e)), e instanceof D.AuthError || e instanceof AuthError ? "Sign in again" : "Try again", e instanceof D.AuthError || e instanceof AuthError ? "connect" : "retry");
       } finally { this.loading = false; }
+    },
+    lib: {},
+    summary(a, b) {  // library.json entry vs file description: the higher rev, then the later video, wins
+      if (!a) return b; if (!b || !Object.keys(b).length) return a;
+      if ((a.rev || 1) !== (b.rev || 1)) return (a.rev || 1) > (b.rev || 1) ? a : b;
+      return (a.videoAt || 0) >= (b.videoAt || 0) ? a : b;
     },
     render(audio, caps, eds) {
       const host = $("libBody");
@@ -611,7 +622,7 @@
       const waiting = audio.filter((f) => !caps[f.id]).length;
       host.innerHTML = (waiting ? `<div class="lib-note">${waiting} recording${waiting > 1 ? "s" : ""} waiting for Claude. Say “process my voice notes” in Claude to transcribe ${waiting > 1 ? "them" : "it"}, make captions and add ${waiting > 1 ? "them" : "it"} to Notion.</div>` : "") +
         audio.map((f) => {
-          const c = caps[f.id], cm = c ? D.meta(c.description) : {}, em = eds[f.id] ? D.meta(eds[f.id].description) : {};
+          const c = caps[f.id], cm = c ? this.summary(this.lib[f.id], D.meta(c.description)) : {}, em = eds[f.id] ? D.meta(eds[f.id].description) : {};
           const asked = em.renderAt && em.renderAt > (cm.videoAt || 0), pending = em.fixes && (em.base || 1) >= (cm.rev || 1);
           const badge = !c ? `<span class="badge b-wait">Waiting for Claude</span>` : asked ? `<span class="badge b-go">Render requested</span>` : cm.videoId ? `<span class="badge b-video">Video ready</span>` : `<span class="badge b-ready">Ready to tune</span>`;
           const dur = (f.appProperties && +f.appProperties.durationSec) || cm.duration || 0;

@@ -30,6 +30,7 @@ The Library tab lists the recordings in Drive. After Claude processes them ("pro
 - `Captions/<audio id>.mp4` and `.srt`: rendered videos, made when the studio asks for one.
 - `Studio/<audio id>.edits.json`: written by the app (look, corrections, render request). Claude re-times corrected words, raises `rev`, and includes an index remap so emphasis edits carry over.
 - `Captions/vocabulary.txt`: names and terms given to the transcriber; corrected words and hard-to-spell glossary terms are added.
+- `Captions/library.json`: the Library's summary of every captions file (title, rev, Notion link, video); written by `notes.py publish`.
 - `Captions/glossary.json`: a copy of the Notion **Glossary** database (themes with their Notion colors; terms with forms, definition, source, status, verified). Claude refreshes it on each run.
 
 ## Themes and the glossary
@@ -43,6 +44,18 @@ The Library needs read access to Drive files the app didn't create (`drive.reado
 `tools/notes.py` runs the local steps of processing (transcription with forced alignment, captions, listening copy for Notion, applying corrections, glossary tagging, rendering); `tools/vc.py` is the caption engine's Python side and shares `engine.js` with the studio.
 
 Caption timing is checked against a second, silence-skipping transcription pass: on long recordings with pauses, a single whole-recording pass can slide its timestamps by up to ~20 s. `notes.py retime AUDIO CAPTIONS.json` repairs captions made before this check (Nov 23, 2026) without changing their words, so studio edits still fit.
+
+## Running on a desktop
+Processing and code work can run in Claude Code on a computer instead of the cloud workspace, with far fewer connector calls.
+
+**Google Drive for desktop.** Install it (https://www.google.com/drive/download/), sign in as the Drive account the app uses, and make "Voice Notes Inbox" available on the computer: either mirror My Drive, or stream it and set the folder to "Available offline". Then `notes.py publish CAPTIONS.json ... --drive-dir "<path to Voice Notes Inbox>"` writes the captions, `glossary.json`, `vocabulary.txt` and `library.json` straight into `Captions/`. Drive syncs them as updates to the existing files. The app looks files up by name and uses the newest, so nothing needs trashing, and no file descriptions are needed because the Library reads `library.json`. New recordings and studio edits appear in the same folder as ordinary files.
+
+**Notion integration token.** At https://www.notion.so/profile/integrations, create an internal integration and copy its token. Then share the Voice Notes and Glossary databases with it: open each database, then the ••• menu, then Connections. With `NOTION_TOKEN` set, `python3 tools/notion_batch.py changes.json` applies many property updates (themes, glossary status, relations) in one command. Writing note pages (transcripts, TL;DRs) still goes through Claude's Notion connector.
+
+**Tools.** Python 3.10+, ffmpeg, and `python3 tools/notes.py setup` (speech model, aligner, fonts; it needs Chrome or `playwright install chromium`). The scheduled nightly run stays in the cloud unless it is set to require this computer, which must then be awake.
+
+## Tests
+`python3 tests/test_tools.py` (pipeline checks) and `python3 tests/run_tests.py` (browser tests for the Library and studio). Both use a synthetic recording, so no personal data is in the repo. See `CLAUDE.md`.
 
 ## Desktop
 On screens 1000 px and wider the studio uses two columns (stage and player on the left, the Look / Voice / Motion / Words panels on the right) and the Library shows recordings in a grid. In the Words tab the transcript follows the playing word until you scroll it yourself; a button brings you back.
