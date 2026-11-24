@@ -56,6 +56,7 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
 
 ## Gotchas
 - iOS web apps can't record with the screen locked. Keep the screen-awake behavior.
-- In Claude's cloud workspace, the shell can't reach googleapis.com or api.notion.com, so Drive and Notion go through the connectors there. On a desktop, Google Drive for desktop and `notion_batch.py` replace most connector calls (see README, "Running on a desktop").
+- The standard setup is cloud only. Drive and Notion go through Claude's connectors, because the cloud workspace's shell can't reach googleapis.com or api.notion.com. Don't introduce tokens, local installs or machine-specific steps; Behnam wants it hardware-independent and simple. `--drive-dir` and `notion_batch.py` are an optional speed-up on a computer, and nothing depends on them.
+- The nightly scheduled task runs a cheap gate first: a few Drive searches compared against `Captions/library.json`. It does real work only when there is some. Keep `library.json` current, through `notes.py publish`, so the gate stays accurate.
 - The Drive connector downloads at most 10 MB per file; recordings over 9 MB also arrive as `Parts/`.
 - Theme colors come from Notion color names (`themeColors`). `engine.js` turns each name into a color that reads on the chosen palette.

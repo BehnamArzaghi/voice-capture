@@ -45,8 +45,8 @@ The Library needs read access to Drive files the app didn't create (`drive.reado
 
 Caption timing is checked against a second, silence-skipping transcription pass: on long recordings with pauses, a single whole-recording pass can slide its timestamps by up to ~20 s. `notes.py retime AUDIO CAPTIONS.json` repairs captions made before this check (Nov 23, 2026) without changing their words, so studio edits still fit.
 
-## Running on a desktop
-Processing and code work can run in Claude Code on a computer instead of the cloud workspace, with far fewer connector calls.
+## Optional: running on a computer
+The standard setup is fully in the cloud. A Claude chat in the "Voice Capture" project does the work through its Google Drive and Notion connectors, and a nightly scheduled task processes new recordings. Nothing needs to be installed. The steps below are an optional speed-up for bulk work on one computer, and nothing depends on them.
 
 **Google Drive for desktop.** Install it (https://www.google.com/drive/download/), sign in as the Drive account the app uses, and make "Voice Notes Inbox" available on the computer: either mirror My Drive, or stream it and set the folder to "Available offline". Then `notes.py publish CAPTIONS.json ... --drive-dir "<path to Voice Notes Inbox>"` writes the captions, `glossary.json`, `vocabulary.txt` and `library.json` straight into `Captions/`. Drive syncs them as updates to the existing files. The app looks files up by name and uses the newest, so nothing needs trashing, and no file descriptions are needed because the Library reads `library.json`. New recordings and studio edits appear in the same folder as ordinary files.
 
