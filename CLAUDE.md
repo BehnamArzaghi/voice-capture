@@ -15,7 +15,7 @@ Behnam Arzaghi's voice recorder and caption studio. It is an iPhone web app on G
 | `engine.js` | Caption engine (video frames, and thumbnails with `buildThumb`/`drawThumb`). The studio and the renderers share it, so changes show in both |
 | `shared.js` | `VCDrive`: Drive helpers used by both pages |
 | `sw.js` | Service worker. **Bump `CACHE` (vc-shell-vN) whenever a shipped file changes** |
-| `tools/notes.py` | Pipeline commands: prepare, apply, retime, glossary, tag, publish, render (see its docstring) |
+| `tools/notes.py` | Pipeline commands: prepare, apply, retime, glossary, tag, publish, render, thumb (see its docstring) |
 | `tools/vc.py` | Analysis, alignment and rendering (headless Chrome running `engine.js`) |
 | `tools/notion_batch.py` | Many Notion updates in one command (needs `NOTION_TOKEN`; desktop runs) |
 | `tests/` | Browser tests (Playwright) and pipeline checks, on a synthetic recording |
@@ -42,9 +42,9 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
 - `Captions/glossary.json`: a copy of the Notion Glossary. `updatedAt` marks which studio requests are done.
 - `Studio/<id>.edits.json`, written by the studio: `{base, params, fixes, render, glossary, thumb}`.
   - `thumb`: `{title, subtitle, follow, look, tSize, subRatio, rule, edits, thEdits}`. `follow: true` means the video's look (`params`); otherwise `look` holds its own, like a saved look. Its `edits` and `thEdits` are keyed by word and occurrence (`"myth#0"`), not by index, so they survive changes to the text.
-- `Studio/<id>.thumbnail.png`: the thumbnail, saved from the Thumbnail tab.
   - `params.thEdits` maps a word index to a theme name, with `""` for no theme. Older edits use numeric indices.
   - `params.thOff` lists hidden themes. Like `edits` and `thEdits`, it belongs to the recording and is never saved in a look.
+- `Studio/<id>.thumbnail.png`: the thumbnail, saved from the Thumbnail tab.
 - `Studio/looks.json`: saved looks.
 
 ## Where things live

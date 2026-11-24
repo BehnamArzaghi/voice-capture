@@ -28,8 +28,8 @@ The Library tab lists the recordings in Drive. After Claude processes them ("pro
 
 - `Captions/<audio id>.captions.json`: written by Claude (words, timings, voice analysis). The file description holds a short JSON summary (rev, title, Notion link, video id) for the Library.
 - `Captions/<audio id>.mp4` and `.srt`: rendered videos, made when the studio asks for one.
-- `Studio/<audio id>.edits.json`: written by the app (look, corrections, render request, thumbnail).
-- `Studio/<audio id>.thumbnail.png`: the thumbnail, when saved to Drive from the Thumbnail tab. Claude re-times corrected words, raises `rev`, and includes an index remap so emphasis edits carry over.
+- `Studio/<audio id>.edits.json`: written by the app (look, corrections, render request, thumbnail). Claude re-times corrected words, raises `rev`, and includes an index remap so emphasis edits carry over.
+- `Studio/<audio id>.thumbnail.png`: the thumbnail, when saved to Drive from the Thumbnail tab.
 - `Captions/vocabulary.txt`: names and terms given to the transcriber; corrected words and hard-to-spell glossary terms are added.
 - `Captions/library.json`: the Library's summary of every captions file (title, rev, Notion link, video); written by `notes.py publish`.
 - `Captions/glossary.json`: a copy of the Notion **Glossary** database (themes with their Notion colors; terms with forms, definition, source, status, verified). Claude refreshes it on each run.
