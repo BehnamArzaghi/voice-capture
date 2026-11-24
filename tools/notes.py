@@ -28,6 +28,7 @@ Drive layout (inside "Voice Notes Inbox"):
   Captions/glossary.json      copy of the Notion Glossary (themes, colors, terms)
   Listening copies/ID.m4a     small copy that Notion's audio player fetches (folder shared by link)
   Listening copies/ID.light.m4a, ID.full.m4a   noise-reduced copies; description {snr, rec, level}; the studio's Sound switch plays them
+                              (over 3 MB they go up as byte parts ID.full.m4a.p1of3 ..., which the studio joins)
   Studio/ID.edits.json        written by the app: {base, params, fixes, render, glossary, thumb}
   Studio/ID.thumbnail.png     the studio's thumbnail, when saved to Drive from the Thumbnail tab
 """
@@ -37,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.environ.get("VN_WORK", "/home/claude/vn")
 VC = os.path.join(HERE, "vc.py")
 NOTION_MAX = 5 * 1024 * 1024  # Notion free workspaces fetch files up to 5 MiB
+PART_MAX = 3_000_000  # the Drive connector takes about 3.1 MB of file per call; larger listening copies go up as byte parts
 
 
 def sh(*cmd, **kw):
@@ -490,9 +492,32 @@ def cmd_publish(a):
         return
     plan = [{"name": n, "ref": ref(src), **({"description": d} if d else {})} for src, n, d in files]
     plan.append({"name": "library.json", "ref": ref(out_lib)})
-    plan += [{"folder": "Listening copies", "name": n, "ref": ref(src), "description": d} for src, n, d in listening]
+    for src, n, d in listening:
+        for pn, pp in split_parts(src, n):
+            plan.append({"folder": "Listening copies", "name": pn, "ref": ref(pp), "description": d,
+                         "mime": "audio/mp4" if pn == n else "application/octet-stream"})
     print(json.dumps({"folder": "Captions", "upload": plan,
-                      "then": "create each file (application/json or text/plain, no conversion), then trash the older file with the same name; descriptions are optional now that library.json carries them"}, indent=1, ensure_ascii=False))
+                      "then": "create each file (its mime, else application/json or text/plain; no conversion), then trash the older files with "
+                              "the same name; for a listening copy also trash older parts or whole copies of it (<name> and <name>.p*). "
+                              "Descriptions are optional now that library.json carries them"}, indent=1, ensure_ascii=False))
+
+
+def split_parts(src, name):
+    """[(name, path)] for one upload: the file itself when it fits in a connector call, else byte parts NAME.p1ofN ... beside it
+    in parts/. The studio downloads the parts and joins them back into the original file."""
+    size = os.path.getsize(src)
+    if size <= PART_MAX:
+        return [(name, src)]
+    n = -(-size // PART_MAX)
+    d = os.path.join(os.path.dirname(os.path.abspath(src)), "parts")
+    os.makedirs(d, exist_ok=True)
+    out = []
+    with open(src, "rb") as f:
+        for i in range(1, n + 1):
+            pn = f"{name}.p{i}of{n}"
+            open(os.path.join(d, pn), "wb").write(f.read(-(-size // n)))
+            out.append((pn, os.path.join(d, pn)))
+    return out
 
 
 def cmd_glossary(a):

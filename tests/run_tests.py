@@ -252,6 +252,15 @@ async def t_sound(p, base):
     b, pg, errs = await open_studio(p, base); await pg.wait_for_timeout(600)
     C(await pg.evaluate("[__studio.REC, __studio.soundLevel]") == ["light", "light"], "sound: the noise reading can come from library.json")
     await b.close(); H.CLEANDESC = True; H.LIBJSON = ""
+    H.CLEANPARTS = True; H.GETS.clear()
+    b, pg, errs = await open_studio(p, base); await pg.wait_for_timeout(900)
+    st = await pg.evaluate("() => ({l: __studio.soundLevel, d: document.getElementById('au').duration})")
+    ref = json.load(open(H.CAPS))["duration"]
+    C(st["l"] == "full" and abs((st["d"] or 0) - ref) < 1.5, "sound: a copy stored in parts is joined and plays whole", [st, ref])
+    C(sorted(x[-5:] for x in H.GETS if "/PART" in x) == ["PART1", "PART2", "PART3"] and not any("OLDPART" in x for x in H.GETS),
+      "sound: only the complete set of parts is downloaded", H.GETS)
+    C(not errs, "sound: no page errors with parts", errs); await b.close()
+    H.CLEANPARTS = False
     H.CLEANCOPIES = False
     b, pg, errs = await open_studio(p, base)
     await pg.click("#tabs [data-t=voice]"); await pg.wait_for_timeout(300)

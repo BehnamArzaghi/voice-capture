@@ -998,6 +998,24 @@ $("thumbDrive").onclick = async () => {
 let CLEAN = {}, REC = "off", soundLevel = null;
 const soundUrls = {};
 const LEVEL_NAME = { off: "Original", light: "Light", full: "Full" };
+function cleanCopies(files) {  // newest first: a whole file wins; otherwise a complete set of parts
+  const out = {}, sets = {};
+  files.forEach((f) => {
+    const m = f.name.slice(AID.length).match(/^\.(light|full)\.m4a(?:\.p(\d+)of(\d+))?$/); if (!m) return;
+    const lv = m[1], info = D.meta(f.description);
+    if (!m[2]) { if (!out[lv]) out[lv] = { id: f.id, info }; return; }
+    const set = sets[lv] = sets[lv] || { n: +m[3], ids: [], info };
+    if (+m[3] === set.n && !set.ids[+m[2] - 1]) set.ids[+m[2] - 1] = f.id;
+  });
+  Object.entries(sets).forEach(([lv, set]) => {
+    if (!out[lv] && set.ids.filter(Boolean).length === set.n) out[lv] = { parts: set.ids, info: set.info };
+  });
+  return out;
+}
+async function cleanBlob(c) {
+  if (!c.parts) return D.getBlob(c.id, "audio/mp4");
+  return new Blob(await Promise.all(c.parts.map((id) => D.getBlob(id, "application/octet-stream"))), { type: "audio/mp4" });
+}
 function wantLevel() {
   const l = P.denoise && P.denoise !== "auto" ? P.denoise : REC;
   return l !== "off" && !CLEAN[l] ? "off" : l;
@@ -1018,9 +1036,8 @@ function syncSound() {
 }
 async function setSound(level) {
   soundLevel = level;
-  const id = level === "off" ? CAP.listen || AID : CLEAN[level].id;
   try {
-    if (!soundUrls[level]) soundUrls[level] = URL.createObjectURL(await D.getBlob(id, "audio/mp4"));
+    if (!soundUrls[level]) soundUrls[level] = URL.createObjectURL(await (level === "off" ? D.getBlob(CAP.listen || AID, "audio/mp4") : cleanBlob(CLEAN[level])));
     if (soundLevel !== level) return;
     const t = au.currentTime || 0, playing = !au.paused;
     if (au.src === soundUrls[level]) return;
@@ -1182,8 +1199,9 @@ async function boot() {
     CAP = await D.getJson(f[0].id); base = CAP.data; rev = CAP.rev || 1;
     document.title = (CAP.title || "Studio") + " · Studio"; $("title").textContent = CAP.title || "Studio";
     // audio: Claude's small listening copy when there is one, else the original recording
-    const cf = await D.list(`(name = '${D.quote(AID + ".light.m4a")}' or name = '${D.quote(AID + ".full.m4a")}') and trashed = false`, "id,name,description").catch(() => []);
-    cf.forEach((f) => { const lv = f.name.split(".").slice(-2, -1)[0]; if (!CLEAN[lv]) CLEAN[lv] = { id: f.id, info: D.meta(f.description) }; });
+    // a copy too large for one upload arrives as byte parts (<id>.full.m4a.p1of3, ...); joined, they are the original file
+    const cf = await D.list(`(name contains '${D.quote(AID + ".light.m4a")}' or name contains '${D.quote(AID + ".full.m4a")}') and trashed = false`, "id,name,description").catch(() => []);
+    CLEAN = cleanCopies(cf);
     REC = ((CLEAN.full || CLEAN.light || {}).info || {}).rec;
     if (!REC && cap && (CLEAN.full || CLEAN.light)) {  // copies uploaded without descriptions: the noise reading is in library.json
       try { const lf2 = await D.list(`'${cap}' in parents and name = 'library.json' and trashed = false`, "id");

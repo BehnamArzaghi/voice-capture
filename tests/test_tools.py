@@ -47,6 +47,12 @@ out = subprocess.run([sys.executable, os.path.join(HERE, "..", "tools", "notes.p
 plan = json.loads(out.stdout or "{}").get("upload", [])
 lp = [x for x in plan if x.get("folder") == "Listening copies"]
 C(len(lp) == 2 and all(json.loads(x["description"])["level"] in ("light", "full") for x in lp), "clean: publish plans both copies for Listening copies", out.stderr[-300:])
+big = os.path.join(d2, FX["aid"] + ".full.m4a.big"); open(big, "wb").write(os.urandom(notes.PART_MAX * 2 + 123))
+parts = notes.split_parts(big, FX["aid"] + ".full.m4a")
+C([n for n, _ in parts] == [FX["aid"] + f".full.m4a.p{i}of3" for i in (1, 2, 3)]
+  and b"".join(open(pp, "rb").read() for _, pp in parts) == open(big, "rb").read()
+  and all(os.path.getsize(pp) <= notes.PART_MAX for _, pp in parts), "clean: a copy over the upload limit splits into parts that join back exactly")
+C(notes.split_parts(files["full"], "x.full.m4a") == [("x.full.m4a", files["full"])], "clean: a copy within the limit uploads whole")
 import numpy as np, vc  # noqa: E402
 rng = np.random.default_rng(1); sr = 16000; x = rng.normal(0, 0.01, sr * 20).astype(np.float32)
 words = [{"s": t, "e": t + 0.5} for t in np.arange(0.5, 19, 1.0)]

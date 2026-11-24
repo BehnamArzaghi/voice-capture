@@ -40,7 +40,7 @@ Recordings made while driving or walking in wind carry steady background noise. 
 - **Light:** most of the noise removed, some room sound kept.
 - **Full:** also removes the steady hiss left after the first pass.
 
-Both copies are brought back up to an even speaking level, and are saved as `Listening copies/<audio id>.light.m4a` and `.full.m4a`. Claude measures how far the voice stands above the background (in dB, between words) and recommends a level: Full below 8 dB, Light below 16 dB, the original above that. On the noisiest test recordings the noise between words fell by about 10 dB with Full, and transcription agreed with the existing transcript as well or better.
+Both copies are brought back up to an even speaking level, and are saved as `Listening copies/<audio id>.light.m4a` and `.full.m4a`. Claude's Drive connector takes about 3 MB per upload, so a longer copy goes up in byte parts (`.full.m4a.p1of3`, ...), and the studio joins them back into the original file. Claude measures how far the voice stands above the background (in dB, between words) and recommends a level: Full below 8 dB, Light below 16 dB, the original above that. On the noisiest test recordings the noise between words fell by about 10 dB with Full, and transcription agreed with the existing transcript as well or better.
 
 In the studio, **Sound** (top of the Voice tab) switches between Original, Light and Full while playing; a dot marks the recommended level. The choice is saved with the recording, and rendered videos use it. New recordings are cleaned when they are processed. A very noisy one (estimated before transcription) is transcribed and analyzed from the Full copy, so the voice-driven type follows the voice rather than the wind.
 

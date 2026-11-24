@@ -45,7 +45,7 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
   - `params.thEdits` maps a word index to a theme name, with `""` for no theme. Older edits use numeric indices.
   - `params.thOff` lists hidden themes. Like `edits` and `thEdits`, it belongs to the recording and is never saved in a look.
 - `Studio/<id>.thumbnail.png`: the thumbnail, saved from the Thumbnail tab.
-- `Listening copies/<id>.light.m4a`, `<id>.full.m4a`: noise-reduced copies (`notes.py clean`, or made by `prepare`). Each description holds `{snr, rec, level}`, and `library.json` items repeat `noise`. `params.denoise` is "auto" (= rec), "off", "light" or "full". It belongs to the recording (in `KEEP`), and renders use it (`render_audio`).
+- `Listening copies/<id>.light.m4a`, `<id>.full.m4a`: noise-reduced copies (`notes.py clean`, or made by `prepare`). Each description holds `{snr, rec, level}`, and `library.json` items repeat `noise`. `params.denoise` is "auto" (= rec), "off", "light" or "full". It belongs to the recording (in `KEEP`), and renders use it (`render_audio`). Copies over 3 MB are uploaded as byte parts `<name>.p1ofN` (`publish` splits them; the studio joins a complete set, and a whole file wins).
 - `Studio/looks.json`: saved looks.
 
 ## Where things live
@@ -62,5 +62,6 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
 - The standard setup is cloud only. Drive and Notion go through Claude's connectors, because the cloud workspace's shell can't reach googleapis.com or api.notion.com. Don't introduce tokens, local installs or machine-specific steps; Behnam wants it hardware-independent and simple. `--drive-dir` and `notion_batch.py` are an optional speed-up on a computer, and nothing depends on them.
 - The nightly scheduled task runs a cheap gate first: a few Drive searches compared against `Captions/library.json`. It does real work only when there is some. Keep `library.json` current, through `notes.py publish`, so the gate stays accurate.
 - The noise model is vendored at `tools/models/sh.rnnn` (GregorR/rnnoise-models, not subject to copyright), so cleaning needs no download.
+- The Drive connector uploads about 3.1 MB of file per call (the 4.2 MB request cap). `publish` keeps uploads under it.
 - The Drive connector downloads at most 10 MB per file; recordings over 9 MB also arrive as `Parts/`.
 - Theme colors come from Notion color names (`themeColors`). `engine.js` turns each name into a color that reads on the chosen palette.
