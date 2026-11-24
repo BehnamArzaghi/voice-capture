@@ -133,6 +133,38 @@
   .follow { position:fixed; left:50%; bottom:96px; z-index:12; transform:translate(-50%, 14px); opacity:0; pointer-events:none; border:0; border-radius:22px; background:var(--ink); color:var(--paper); font:600 13px "Inter"; height:40px; padding:0 16px 0 13px; display:flex; align-items:center; gap:7px; box-shadow:0 10px 26px -10px rgba(28,27,25,.55); transition:opacity .2s var(--ease), transform .2s var(--ease); cursor:pointer; white-space:nowrap; }
   .follow.on { opacity:1; transform:translate(-50%, 0); pointer-events:auto; }
   .follow b { font-size:16px; line-height:1; font-weight:500; }
+  /* themes (Voice tab) and glossary terms */
+  .th { border-bottom:1px solid var(--line); padding:4px 0 8px; }
+  .th .hd { display:flex; align-items:center; gap:6px; }
+  .th .go { flex:1; display:flex; align-items:center; gap:10px; min-height:42px; border:0; background:transparent; padding:0; text-align:left; font:500 14px "Inter"; color:var(--ink); cursor:pointer; }
+  .th .go i { width:12px; height:12px; border-radius:6px; flex:none; }
+  .th .go .n { margin-left:auto; font:500 12px "Inter"; color:var(--ink3); font-variant-numeric:tabular-nums; }
+  .th .go .nx { font-size:13px; color:var(--ink3); margin-left:2px; }
+  .th .eye { width:40px; height:40px; border-radius:20px; border:0; background:transparent; color:var(--ink2); font:600 11px "Inter"; letter-spacing:.04em; text-transform:uppercase; cursor:pointer; }
+  .th.off .go { color:var(--ink3); }
+  .th.off .go i { background:transparent !important; box-shadow:inset 0 0 0 1.5px var(--ink3); }
+  .terms { display:flex; flex-wrap:wrap; gap:6px; padding:0 0 2px 22px; }
+  .term { min-height:32px; padding:0 11px; border-radius:16px; border:1px solid var(--line); background:var(--card); font:500 12.5px "Inter"; color:var(--ink); cursor:pointer; }
+  .term .c { color:var(--ink3); margin-left:5px; font-variant-numeric:tabular-nums; }
+  .term.s { border-style:dashed; border-color:#BDB5A6; }
+  .badge { display:inline-block; font:600 10px/1.2 "Inter"; letter-spacing:.03em; text-transform:uppercase; padding:3px 6px; border-radius:5px; background:#F1E6D3; color:#87571C; vertical-align:1px; margin-left:6px; white-space:nowrap; }
+  .badge.ok { background:#E2ECDF; color:#3D6934; }
+  .badge.mute { background:#ECE8DF; color:var(--ink2); }
+  .termcard { border:1px solid var(--line); border-radius:12px; padding:10px 12px 12px; background:var(--paper); margin:2px 0 4px; }
+  .termcard .hd2 { font:600 13px "Inter"; display:flex; align-items:center; flex-wrap:wrap; gap:4px 0; }
+  .termcard .hd2 i { display:inline-block; width:10px; height:10px; border-radius:5px; margin-right:7px; }
+  .termcard .def { font:400 14px/1.45 "Inter"; margin:6px 0 4px; }
+  .termcard .src { font:400 12px/1.4 "Inter"; color:var(--ink2); }
+  .termcard a { color:var(--ink2); font:500 12px "Inter"; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:5px; margin-right:6px; }
+  .sel-row { display:flex; align-items:center; gap:8px; margin-bottom:8px; }
+  .sel-row .w { flex:1; margin:0; text-align:center; }
+  .ext { width:38px; height:38px; border-radius:19px; border:1px solid var(--line); background:var(--card); font:600 16px "Inter"; color:var(--ink); cursor:pointer; flex:none; }
+  .ext:disabled { color:var(--ink3); }
+  .words span.sug { text-decoration:underline dashed; text-decoration-thickness:1px; text-underline-offset:5px; }
+  .words span.insel { background:#E1EAF3; }
+  .sheet { max-height:84vh; overflow:auto; }
+  .sheet.on ~ .toast { bottom:auto; top:calc(14px + env(safe-area-inset-top)); }  /* keep messages clear of an open sheet */
   @media (min-width:1000px) {
     .wrap { max-width:1440px; display:grid; grid-template-columns:minmax(0, 1.55fr) minmax(400px, 1fr); column-gap:0; padding:0 0 0 28px; }
     .left { display:flex; flex-direction:column; position:sticky; top:0; height:100vh; min-width:0; padding-right:28px; }
@@ -192,7 +224,8 @@
   <section class="panel" id="p-voice">
     <h2>How your voice shapes the words</h2><div id="voice-sliders"></div>
     <h2>Meaning</h2><div id="meaning-sliders"></div>
-    <h2>Themes in this recording</h2><div class="legend" id="legend"></div>
+    <div class="slider" style="border-bottom:0"><div class="top2"><label>Definition cards</label></div><div class="help" id="cardsHelp">A short card with a term's definition where it is first heard</div><div class="seg" id="cards" style="margin-top:8px"></div></div>
+    <h2>Themes</h2><p class="muted" id="thHelp" style="margin:-2px 0 8px"></p><div id="themes"></div>
   </section>
   <section class="panel" id="p-motion">
     <h2>Types out by</h2><div class="seg" id="unit"></div>
@@ -206,7 +239,7 @@
   <section class="panel" id="p-words">
     <div class="wordbar" id="wordbar"><div class="lbl">Filler words<span id="flCount"></span></div><div class="seg" id="fillers"></div></div>
     <p class="muted" id="flHelp" style="margin:0 0 10px"></p>
-    <p class="muted" style="margin-top:0">Tap a word to correct it or change its emphasis. Dotted words may be misheard. Corrections show right away; Claude re-times them and learns new names the next time it processes your voice notes.</p>
+    <p class="muted" style="margin-top:0">Tap a word to correct it, change its emphasis or tag its theme. Dotted words may be misheard; dashed ones are glossary terms Claude suggested, waiting for your yes or no. Corrections show right away; Claude re-times them, learns new names and updates your Notion glossary the next time it processes your voice notes.</p>
     <p class="muted" id="fixCount" style="margin-top:0"></p>
     <div class="words" id="words"></div>
   </section>
@@ -241,11 +274,13 @@ function setP(patch, record = true) {
   if (record) { hist.push(JSON.stringify(P)); if (hist.length > 80) hist.shift(); fut = []; }
   P = Object.assign({}, P, patch); syncUI(); rebuild();
 }
-function applyPreset(name) { setP(Object.assign(VC.params({ preset: name }), { edits: P.edits, thEdits: P.thEdits })); }
+const KEEP = ["edits", "thEdits", "thOff"];  // per-recording settings: kept when the look changes, never saved in a look
+const kept = () => ({ edits: P.edits, thEdits: P.thEdits, thOff: P.thOff });
+function applyPreset(name) { setP(Object.assign(VC.params({ preset: name }), kept())); }
 function diff() {
   const base = VC.params({ preset: P.preset }), out = { preset: P.preset };
   for (const k of Object.keys(VC.DEFAULTS)) {
-    if (k === "edits" || k === "thEdits") continue;
+    if (KEEP.includes(k)) continue;
     if (JSON.stringify(P[k]) !== JSON.stringify(base[k])) out[k] = P[k];
   }
   return out;
@@ -254,6 +289,7 @@ function recipe() {
   const d = diff();
   if (Object.keys(P.edits || {}).length) d.edits = P.edits;
   if (Object.keys(P.thEdits || {}).length) d.thEdits = P.thEdits;
+  if ((P.thOff || []).length) d.thOff = P.thOff;
   return d;
 }
 $("undo").onclick = () => { if (!hist.length) return; fut.push(JSON.stringify(P)); P = JSON.parse(hist.pop()); syncUI(); rebuild(); };
@@ -317,6 +353,7 @@ function build() {
   seg($("unit"), "unit", [["letter", "Letter"], ["syllable", "Syllable"], ["word", "Word"]]);
   seg($("after"), "after", [["live", "Live"], ["settle", "Settle"], ["breathe", "Breathe"]]);
   seg($("fillers"), "fillers", [["hide", "Hidden"], ["show", "Shown"]]);
+  seg($("cards"), "cards", [["0", "Off"], ["1", "Checked terms"]]);
   DIRECTIONS.forEach((d) => {
     const b = document.createElement("button"); b.className = "chip"; b.textContent = d.name; b.dataset.dir = d.name;
     b.onclick = () => setP(Object.assign({ after: "live" }, d.v)); $("directions").appendChild(b);
@@ -339,7 +376,7 @@ function syncUI() {
   const dir = DIRECTIONS.find((d) => P.after === "live" && Object.entries(d.v).every(([k, v]) => Math.abs((+P[k] || 0) - v) < 0.001));
   document.querySelectorAll("#directions [data-dir]").forEach((b) => b.classList.toggle("on", !!dir && b.dataset.dir === dir.name));
   $("dirNote").textContent = dir ? dir.note : ["linger", "ripple", "sway", "shimmer", "glow"].some((k) => +P[k] > 0) ? "Your own mix." : "";
-  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers);
+  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers); on("cards", String(+P.cards || 0));
   $("flHelp").textContent = P.fillers === "show" ? "Shown in the quiet color, timed to the moment they are spoken." : "Left out of the captions; the words close up and the typing pauses while they are spoken.";
   if (data && P.fillers !== shownFillers) renderWords();
   const edited = Object.keys(diff()).length > 1;
@@ -349,13 +386,15 @@ function syncUI() {
 }
 
 // ---------- scene & drawing
-let rt = null;
+let rt = null, onBuilt = [];
+const whenBuilt = (f) => onBuilt.push(f);  // run after the next scene rebuild (theme colors and names come from the scene)
 function rebuild() {
   clearTimeout(rt);
   rt = setTimeout(async () => {
     try { await Promise.all([200, 400, 700, 900].map((w) => document.fonts.load(`${w} 40px "${P.font}"`))); } catch (e) {}
     if (!data) return;
-    scene = VC.buildScene(data, P, measure); plainScene = null; resize(); legend(); dirty = true;
+    scene = VC.buildScene(data, P, measure); plainScene = null; resize(); drawThemes(); dirty = true;
+    const cbs = onBuilt; onBuilt = []; cbs.forEach((f) => f());
     try { localStorage.setItem("vc2-params", JSON.stringify(recipe())); } catch (e) {}
     if (ready) saveEdits();
   }, 70);
@@ -416,8 +455,112 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
-function legend() {
-  const th = (data && data.themes) || []; $("legend").innerHTML = th.length ? th.map((n, i) => `<span><i style="background:${scene.tcol[i % scene.tcol.length]}"></i>${n}</span>`).join("") : `<span class="muted">No themes tagged yet — ask Claude to tag concepts.</span>`;
+// ---------- themes & glossary
+// Captions/glossary.json mirrors the Notion glossary: themes (with their Notion colors) and terms (definition, source, status).
+// Claude tags each recording's terms when it processes it (data.terms: where each term occurs). What you change here is kept
+// in this recording's edits: theme tags by word (P.thEdits, by theme name; "" = none) and glossary requests (GL), which Claude
+// applies in Notion on its next run.
+let GLOSS = null, GL = [], termOf = {}, selA = -1, selB = -1, selI = -1, scope = "here";
+try { GLOSS = JSON.parse(localStorage.getItem("vc2-glossary") || "null"); } catch (e) {}
+const tokN = (s) => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}'\-]/gu, "").replace(/^['-]+|['-]+$/g, "");
+const seqOf = (s) => String(s || "").split(/[\s,]+/).map(tokN).filter(Boolean);
+const thList = () => (scene ? scene.themes : data.themes) || [];
+const thColor = (k) => (scene && k != null && k >= 0 ? scene.tcol[k % scene.tcol.length] : "#9A958C");
+function effTh(i) {  // the theme a word shows: your tag if you set one, else Claude's
+  const te = VC.themeIndex(P.thEdits[i], thList()), th = te !== undefined ? te : data.words[i].th;
+  return th == null ? null : th;
+}
+function textOf(a, b) {
+  return data.words.slice(a, b + 1).filter((w) => !w.fl && w.w.trim()).map((w) => w.w.trim()).join(" ").replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+}
+function glossTerm(text) {  // the glossary entry whose name or a listed form is TEXT (case, accents, punctuation and a plural ending ignored)
+  if (!GLOSS || !GLOSS.terms) return null;
+  const k = seqOf(text).join(" "); if (!k) return null;
+  return GLOSS.terms.find((t) => [t.term].concat(t.forms || []).some((v) => { const x = seqOf(v).join(" "); return x === k || x + "s" === k || x + "es" === k || x + "'s" === k; })) || null;
+}
+const pendingFor = (term) => GL.find((g) => g.term && g.term.toLowerCase() === String(term).toLowerCase()) || null;
+function glOp(op) {  // one request per term (or new theme); the latest replaces the earlier one. {undo:true} withdraws it.
+  const key = (g) => (g.op === "newTheme" ? "T:" + g.name : "t:" + String(g.term || "").toLowerCase());
+  GL = GL.filter((g) => key(g) !== key(op));
+  if (!op.undo) GL.push(Object.assign({ at: Date.now() }, op));
+  applyFixes();
+}
+function themeRuns() {  // stretches of consecutive words with the same theme (fillers don't break or count)
+  const runs = []; let cur = null;
+  data.words.forEach((w, i) => {
+    if (w.fl) return;
+    const th = effTh(i);
+    if (th == null) { cur = null; return; }
+    if (cur && cur.th === th) cur.b = i; else { cur = { th, a: i, b: i }; runs.push(cur); }
+  });
+  return runs;
+}
+function jumpTo(i) { au.currentTime = Math.max(0, data.words[i].s - 0.35); dirty = true; follow = true; markWord(true); }
+function nextFrom(starts) {  // index of the first start after the playhead (wrapping round)
+  const t = au.currentTime + 0.4; const k = starts.findIndex((i) => data.words[i].s > t); return k < 0 ? 0 : k;
+}
+function drawThemes() {
+  if (!data || !scene) return;
+  const host = $("themes"), ths = scene.themes, off = new Set(P.thOff || []), runs = themeRuns();
+  const cnt = ths.map(() => 0); runs.forEach((r) => cnt[r.th]++);
+  const termsBy = ths.map(() => []);
+  (data.terms || []).forEach((t, j) => { if (statusOf(t.t, t.st).st !== "r" && t.th != null && termsBy[t.th]) termsBy[t.th].push(j); });
+  const used = ths.map((_, k) => k).filter((k) => cnt[k]).sort((a, b) => cnt[b] - cnt[a]), unused = ths.map((_, k) => k).filter((k) => !cnt[k]);
+  const nv = (data.terms || []).filter((t) => t.v && t.def && statusOf(t.t, t.st).st !== "r").length, ns = scene.cards ? scene.cards.length : 0;
+  $("cardsHelp").textContent = "A short card with a term's definition where it is first heard. Only definitions checked against a source appear, "
+    + (nv ? `${nv} in this recording${+P.cards ? ` (${ns} shown, one at a time)` : ""}.` : "and none in this recording are checked yet.");
+  $("thHelp").textContent = !ths.length ? "" : used.length
+    ? "From your Notion glossary. Tap a theme or term to hear its next mention; Hide keeps a theme's color out of the video. Dashed terms are suggestions."
+    : "Nothing tagged in this recording yet. Tap a word in Words to tag it with a theme.";
+  host.innerHTML = !ths.length ? `<p class="muted">No themes yet. Claude brings them from your Notion glossary the next time it processes your voice notes.</p>`
+    : used.map((k) => `<div class="th ${off.has(ths[k]) ? "off" : ""}"><div class="hd"><button class="go" data-go="${k}"><i style="background:${thColor(k)}"></i><span>${escH(ths[k])}</span><span class="n">${cnt[k]}</span><span class="nx">›</span></button><button class="eye" data-eye="${k}" aria-pressed="${off.has(ths[k])}">${off.has(ths[k]) ? "Show" : "Hide"}</button></div>`
+        + (termsBy[k].length ? `<div class="terms">${termsBy[k].map((j) => { const t = data.terms[j]; return `<button class="term ${t.st === "s" ? "s" : ""}" data-term="${j}">${escH(t.t)}<span class="c">${t.occ.length}</span></button>`; }).join("")}</div>` : "") + `</div>`).join("")
+      + (unused.length ? `<p class="muted" style="margin:12px 0 0">Not in this recording: ${unused.map((k) => escH(ths[k])).join(" · ")}</p>` : "");
+  host.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => {
+    const k = +b.dataset.go, rs = runs.filter((r) => r.th === k); if (!rs.length) return;
+    const n = nextFrom(rs.map((r) => r.a)); jumpTo(rs[n].a);
+    toast(`${ths[k]} · ${n + 1} of ${rs.length}: “${textOf(rs[n].a, rs[n].b)}”`, 2400);
+  }));
+  host.querySelectorAll("[data-eye]").forEach((b) => (b.onclick = () => {
+    const name = ths[+b.dataset.eye], o = new Set(P.thOff || []);
+    if (o.has(name)) o.delete(name); else o.add(name); setP({ thOff: [...o] }); whenBuilt(renderWords);
+  }));
+  host.querySelectorAll("[data-term]").forEach((b) => (b.onclick = () => openTerm(+b.dataset.term)));
+}
+function statusOf(term, st) {  // st from the glossary: "s" suggested / "a" accepted; a pending request overrides it
+  const g = pendingFor(term);
+  if (!g) return { st, label: st === "a" ? `<span class="badge ok">In glossary</span>` : `<span class="badge mute">Suggested</span>`, g };
+  if (g.op === "reject") return { st: "r", label: `<span class="badge mute">Rejected · leaves the glossary next run</span>`, g };
+  return { st: "a", label: `<span class="badge ok">${g.op === "add" ? "Added" : g.op === "theme" ? "Theme changed" : "Accepted"} · Notion updates next run</span>`, g };
+}
+function termCard(T) {  // T: {t, th (index or null), st, def, src, v, url}
+  const S = statusOf(T.t, T.st), name = T.th != null ? thList()[T.th] : "";
+  const acts = S.g ? `<button class="chip" data-tc="undo">Undo</button>`
+    : (T.st === "s" ? `<button class="chip" data-tc="accept">Accept</button><button class="chip" data-tc="reject">Reject</button>` : `<button class="chip" data-tc="reject">Remove from glossary</button>`);
+  return `<div class="termcard"><div class="hd2">${name ? `<i style="background:${thColor(T.th)}"></i>${escH(name)}` : "No theme"}${S.label}</div>
+    <div class="def">${T.def ? escH(T.def) : `<span class="muted">No definition yet.</span>`}</div>
+    ${T.src || !T.v ? `<div class="src">${T.src ? escH(T.src) : ""}${T.v ? `<span class="badge ok">Checked</span>` : `<span class="badge">Unverified · from training data</span>`}</div>` : ""}
+    <div class="row" style="margin-top:10px;align-items:center">${acts}${T.url ? `<a href="${escH(T.url)}" target="_blank" rel="noopener" style="margin-left:auto">Open in Notion</a>` : ""}</div></div>`;
+}
+function wireCard(T, again) {
+  document.querySelectorAll("#sheetBody [data-tc]").forEach((b) => (b.onclick = () => {
+    const v = b.dataset.tc;
+    glOp(v === "undo" ? { op: "accept", term: T.t, undo: true } : { op: v, term: T.t });
+    saveEdits(); rebuild(); whenBuilt(() => { renderWords(); again(); });
+  }));
+}
+function openTerm(j, oi) {
+  const t = data.terms[j]; if (!t || !t.occ.length) return;
+  if (oi == null) oi = nextFrom(t.occ.map((o) => o[0]));
+  oi = (oi + t.occ.length) % t.occ.length;
+  const [a, n] = t.occ[oi]; jumpTo(a);
+  sheetOpen(`<div class="w">${escH(t.t)}</div>${termCard(t)}
+    <div class="row" style="margin-top:12px;align-items:center;flex-wrap:nowrap"><button class="ext" id="tPrev" aria-label="Previous mention">‹</button>
+      <span class="muted" style="flex:1;text-align:center">${oi + 1} of ${t.occ.length} · ${fmt(data.words[a].s)} · “${escH(textOf(a, a + n - 1))}”</span><button class="ext" id="tNext" aria-label="Next mention">›</button></div>
+    <div class="row" style="margin-top:16px"><button class="btn" id="tWord" style="flex:1">Edit these words</button><button class="btn" id="tDone">Done</button></div>`);
+  wireCard(t, () => openTerm(j, oi));
+  $("tPrev").onclick = () => openTerm(j, oi - 1); $("tNext").onclick = () => openTerm(j, oi + 1);
+  $("tWord").onclick = () => openWord(a, a, a + n - 1); $("tDone").onclick = sheetClose;
 }
 
 // ---------- transport
@@ -454,7 +597,10 @@ function renderWords() {
     const s = document.createElement("span"); s.id = "w" + i; const fx = i in fixes; s.textContent = fx ? (fixes[i] || base.words[i].w.trim()) : w.w.trim();
     const ed = P.edits[i];
     s.className = fx ? "fx " + (fixes[i] ? "" : "gone ") : (w.fl ? "fl " + (P.fillers !== "show" ? "off " : "") : w.fn && !ed ? "fn " : "") + (w.p < 0.5 && !w.fl ? "low " : "") + (ed ? "ed-" + ed : "");
-    const th = P.thEdits[i] != null ? P.thEdits[i] : w.th; if (th != null && th >= 0 && scene) s.style.color = scene.tcol[th % scene.tcol.length];
+    const th = effTh(i), T = termOf[i];
+    if (th != null && scene && !(P.thOff || []).includes(scene.themes[th])) s.style.color = thColor(th);
+    if (T && th != null && th === data.terms[T[0]].th && statusOf(data.terms[T[0]].t, data.terms[T[0]].st).st === "s") s.classList.add("sug");
+    if (i >= selA && i <= selB && $("sheet").classList.contains("on")) s.classList.add("insel");
     s.onclick = () => openWord(i); host.appendChild(s); host.appendChild(document.createTextNode(" "));
   });
 }
@@ -510,31 +656,111 @@ function markWord(force) {
   if (b && follow && (!au.paused || force)) toCur(b, !force && !jumped);
   followBtn();
 }
-function openWord(i) {
-  const w = data.words[i], orig = base.words[i].w.trim(), ed = P.edits[i] || "auto", th = P.thEdits[i] != null ? P.thEdits[i] : w.th != null ? w.th : -1;
-  const themes = data.themes || [];
-  const shown = i in fixes ? fixes[i] : orig;
-  $("sheetBody").innerHTML = `<div class="w">${escH(shown || orig)}${i in fixes ? ` <span class="muted" style="font-weight:400;font-size:13px">was “${escH(orig)}”</span>` : ""}</div>
-    <h2 style="margin-top:0">Correct the word</h2>
+function markSel() {
+  document.querySelectorAll("#words span.insel").forEach((x) => x.classList.remove("insel"));
+  if (!$("sheet").classList.contains("on")) return;
+  for (let q = selA; q <= selB; q++) { const el = $("w" + q); if (el) el.classList.add("insel"); }
+}
+const stepWord = (i, d) => { let q = i + d; while (q >= 0 && q < data.words.length && (data.words[q].fl || !data.words[q].w.trim())) q += d; return q >= 0 && q < data.words.length ? q : -1; };
+function findSeq(a, b) {  // every place in this recording where the selected words occur (fillers skipped), as [first, last] word indices
+  const want = seqOf(textOf(a, b)); if (!want.length) return [[a, b]];
+  const idx = [], toks = [];
+  data.words.forEach((w, i) => { if (!w.fl && w.w.trim()) { idx.push(i); toks.push(tokN(w.w)); } });
+  const out = [], n = want.length, last = want[n - 1];
+  for (let j = 0; j + n <= toks.length; j++) {
+    let ok = true;
+    for (let q = 0; q < n && ok; q++) { const t = toks[j + q]; ok = t === want[q] || (q === n - 1 && (t === last + "s" || t === last + "es" || t + "s" === last)); }
+    if (ok) { out.push([idx[j], idx[j + n - 1]]); j += n - 1; }
+  }
+  return out.length ? out : [[a, b]];
+}
+function selTerm(a, b, text) {  // the glossary term these words are, if any: tagged here (data.terms) or anywhere in the glossary
+  const T = termOf[a];
+  if (T && T[1] === a && T[1] + T[2] - 1 === b) return data.terms[T[0]];
+  const g = glossTerm(text); if (!g) return null;
+  const k = thList().indexOf(g.theme);
+  return { t: g.term, th: k >= 0 ? k : null, st: g.status === "Accepted" ? "a" : "s", def: g.def, src: g.src, v: !!g.verified, url: g.url, occ: [] };
+}
+// The word sheet: tap a word (on the video or in Words). ‹ › widen the selection to a phrase; a glossary term opens selected whole.
+function openWord(i, a, b) {
+  if (a == null) {
+    const T = termOf[i];
+    if (T && statusOf(data.terms[T[0]].t, data.terms[T[0]].st).st !== "r" && !(i in fixes)) { a = T[1]; b = T[1] + T[2] - 1; } else a = b = i;
+  }
+  selI = i; selA = a; selB = b;
+  const w = data.words[i], orig = base.words[i].w.trim(), one = a === b, text = textOf(a, b) || orig;
+  const ths = thList(), cur = [];
+  for (let q = a; q <= b; q++) if (!data.words[q].fl) cur.push(effTh(q));
+  const curTh = cur.length && cur.every((x) => x === cur[0]) ? cur[0] : undefined;  // undefined = mixed
+  const eds = []; for (let q = a; q <= b; q++) if (!data.words[q].fl) eds.push(P.edits[q] || "auto");
+  const ed = eds.every((x) => x === eds[0]) ? eds[0] : "";
+  const T = selTerm(a, b, text), shown = i in fixes ? fixes[i] : orig;
+  const n = scope === "here" ? 1 : findSeq(a, b).length;
+  const note = scope === "here" ? (one ? "Only this word, here." : "Only these words, here.")
+    : scope === "all" ? `Every “${escH(text)}” in this recording (${n}).`
+    : T ? `Every “${escH(text)}” here (${n}); Claude sets this theme on “${escH(T.t)}” in your Notion glossary on its next run (None removes it).`
+    : `Every “${escH(text)}” here (${n}); Claude adds it to your Notion glossary with this theme on its next run.`;
+  sheetOpen(`<div class="sel-row"><button class="ext" id="selL" aria-label="Add the word before" ${stepWord(a, -1) < 0 ? "disabled" : ""}>‹</button>
+      <div class="w">${escH(one ? shown || orig : text)}${one && i in fixes ? ` <span class="muted" style="font-weight:400;font-size:13px">was “${escH(orig)}”</span>` : ""}</div>
+      <button class="ext" id="selR" aria-label="Add the next word" ${stepWord(b, 1) < 0 ? "disabled" : ""}>›</button></div>
+    ${!one ? `<div class="row" style="justify-content:center;margin:-2px 0 8px"><button class="chip" id="selOne">Just “${escH(orig)}”</button></div>` : ""}
+    ${T ? termCard(T) : ""}
+    ${one ? `<h2>Correct the word</h2>
     <div class="fixrow"><input class="name" id="fixIn" value="${escH(shown)}" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done"><button class="chip" id="fixSave">Save</button></div>
-    <div class="row" style="margin-top:8px"><button class="chip" id="fixDel">Remove word</button>${i in fixes ? `<button class="chip" id="fixUndo">Undo correction</button>` : ""}</div>
+    <div class="row" style="margin-top:8px"><button class="chip" id="fixDel">Remove word</button>${i in fixes ? `<button class="chip" id="fixUndo">Undo correction</button>` : ""}</div>` : ""}
     <h2>Emphasis</h2><div class="seg" id="edSeg">${[["auto", "Auto"], ["emph", "Emphasize"], ["normal", "Normal"], ["quiet", "Quieter"]].map(([v, l]) => `<button data-v="${v}" class="${ed === v ? "on" : ""}">${l}</button>`).join("")}</div>
-    <h2>Theme</h2><div class="row" id="thRow"><button class="chip ${th < 0 ? "on" : ""}" data-v="-1">None</button>${themes.map((n, k) => `<button class="chip ${th === k ? "on" : ""}" data-v="${k}"><i style="display:inline-block;width:9px;height:9px;border-radius:5px;margin-right:6px;background:${scene.tcol[k % scene.tcol.length]}"></i>${n}</button>`).join("")}</div>
-    <div class="row" style="margin-top:16px"><button class="btn" id="jump" style="flex:1">Play from here</button><button class="btn" id="closeS">Done</button></div>`;
-  $("sheet").classList.add("on"); followBtn();
-  document.querySelectorAll("#edSeg button").forEach((b) => (b.onclick = () => {
-    const e = Object.assign({}, P.edits); if (b.dataset.v === "auto") delete e[i]; else e[i] = b.dataset.v; setP({ edits: e }); openWord(i); renderWords();
+    <h2>Theme</h2>
+    <div class="seg" id="scopeSeg">${[["here", "Here"], ["all", "Whole recording"], ["gloss", "+ Glossary"]].map(([v, l]) => `<button data-v="${v}" class="${scope === v ? "on" : ""}">${l}</button>`).join("")}</div>
+    <p class="muted" style="margin:6px 0 8px">${note}</p>
+    <div class="row" id="thRow"><button class="chip ${curTh === null ? "on" : ""}" data-v="">None</button>${ths.map((nm, k) => `<button class="chip ${curTh === k ? "on" : ""}" data-v="${escH(nm)}"><i class="dot" style="background:${thColor(k)}"></i>${escH(nm)}</button>`).join("")}<button class="chip" id="newTh">+ New theme</button></div>
+    <div class="fixrow" id="newThRow" style="display:none;margin-top:8px"><input class="name" id="newThIn" placeholder="New theme name" maxlength="40" autocomplete="off" enterkeyhint="done"><button class="chip" id="newThSave">Add</button></div>
+    <div class="row" style="margin-top:16px"><button class="btn" id="jump" style="flex:1">Play from here</button><button class="btn" id="closeS">Done</button></div>`);
+  markSel();
+  const again = () => openWord(i, selA, selB), after = (f) => whenBuilt(() => { renderWords(); f(); });
+  $("selL").onclick = () => { const q = stepWord(selA, -1); if (q >= 0) openWord(i, q, selB); };
+  $("selR").onclick = () => { const q = stepWord(selB, 1); if (q >= 0) openWord(i, selA, q); };
+  if ($("selOne")) $("selOne").onclick = () => openWord(i, i, i);
+  if (T) wireCard(T, again);
+  document.querySelectorAll("#edSeg button").forEach((x) => (x.onclick = () => {
+    const e = Object.assign({}, P.edits);
+    for (let q = selA; q <= selB; q++) { if (data.words[q].fl) continue; if (x.dataset.v === "auto") delete e[q]; else e[q] = x.dataset.v; }
+    setP({ edits: e }); after(again);
   }));
-  document.querySelectorAll("#thRow button").forEach((b) => (b.onclick = () => {
-    const e = Object.assign({}, P.thEdits); const v = +b.dataset.v; if (v === (w.th != null ? w.th : -1)) delete e[i]; else e[i] = v; setP({ thEdits: e }); openWord(i); renderWords();
-  }));
-  const setFix = (v) => { if (v === null || v === orig) delete fixes[i]; else fixes[i] = v; applyFixes(); rebuild(); renderWords(); saveEdits(); openWord(i); };
-  $("fixSave").onclick = () => setFix($("fixIn").value.replace(/\s+/g, " ").trim());
-  $("fixIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fixSave").click(); } });
-  $("fixDel").onclick = () => setFix("");
-  if ($("fixUndo")) $("fixUndo").onclick = () => setFix(null);
-  $("jump").onclick = () => { au.currentTime = Math.max(0, w.s - 1.5); $("sheet").classList.remove("on"); follow = true; au.play().catch(() => {}); };
-  $("closeS").onclick = () => { $("sheet").classList.remove("on"); followBtn(); };
+  document.querySelectorAll("#scopeSeg button").forEach((x) => (x.onclick = () => { scope = x.dataset.v; again(); }));
+  const setTheme = (name) => {  // name: a theme name, or "" for none
+    const txt = textOf(selA, selB);
+    if (scope === "gloss") {
+      const g = selTerm(selA, selB, txt);
+      if (g) glOp(name ? { op: "theme", term: g.t, theme: name } : { op: "reject", term: g.t });
+      else if (name) glOp({ op: "add", term: txt, theme: name, ex: `${fmt(data.words[selA].s)} “${txt}”` });
+    }
+    const spans = scope === "here" ? [[selA, selB]] : findSeq(selA, selB), e = Object.assign({}, P.thEdits);
+    spans.forEach(([x, y]) => { for (let q = x; q <= y; q++) {
+      if (data.words[q].fl) continue;
+      const auto = data.words[q].th != null ? data.themes[data.words[q].th] : "";
+      if (name === auto) delete e[q]; else e[q] = name;
+    } });
+    setP({ thEdits: e }); saveEdits(); after(again);
+    if (scope !== "here" && spans.length > 1) toast(`${name ? `Tagged ${name}` : "Untagged"} in ${spans.length} places`);
+  };
+  document.querySelectorAll("#thRow [data-v]").forEach((x) => (x.onclick = () => setTheme(x.dataset.v)));
+  $("newTh").onclick = () => { $("newThRow").style.display = "flex"; $("newThIn").focus(); };
+  const addTh = () => {
+    const nm = $("newThIn").value.replace(/\s+/g, " ").trim(); if (!nm) return;
+    const have = thList().find((x) => x.toLowerCase() === nm.toLowerCase());
+    if (!have) { glOp({ op: "newTheme", name: nm }); toast(`New theme “${nm}”: Claude adds it to Notion on its next run`, 3600); }
+    setTheme(have || nm);
+  };
+  $("newThSave").onclick = addTh; $("newThIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addTh(); } });
+  if (one) {
+    const setFix = (v) => { if (v === null || v === orig) delete fixes[i]; else fixes[i] = v; applyFixes(); rebuild(); saveEdits(); after(() => openWord(i, i, i)); };
+    $("fixSave").onclick = () => setFix($("fixIn").value.replace(/\s+/g, " ").trim());
+    $("fixIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fixSave").click(); } });
+    $("fixDel").onclick = () => setFix("");
+    if ($("fixUndo")) $("fixUndo").onclick = () => setFix(null);
+  }
+  $("jump").onclick = () => { au.currentTime = Math.max(0, data.words[selA].s - 1.5); sheetClose(); follow = true; au.play().catch(() => {}); };
+  $("closeS").onclick = sheetClose;
 }
 
 // ---------- looks, render requests (shared storage when available, this device otherwise)
@@ -544,7 +770,7 @@ function toast(msg, ms = 2600, action) {
   t.classList.add("on"); clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("on"), ms);
 }
 // Saved looks sit in the Looks grid after the built-in ones; they are kept in Drive (Studio/looks.json), shared by every recording
-const lookKey = (p) => JSON.stringify(Object.keys(p).sort().filter((k) => k !== "edits" && k !== "thEdits").map((k) => [k, p[k]]));
+const lookKey = (p) => JSON.stringify(Object.keys(p).sort().filter((k) => !KEEP.includes(k)).map((k) => [k, p[k]]));
 function activeLook() { const k = lookKey(diff()); return looks.find((L) => lookKey(L.params) === k) || null; }
 function drawLooks() {
   document.querySelectorAll("#presets .preset.saved").forEach((b) => b.remove());
@@ -554,7 +780,7 @@ function drawLooks() {
     b.innerHTML = `<div class="sw" style="background:${pal.bg};color:${pal.ink};font-family:'${pp.font}';font-weight:${Math.min(700, pp.weight + 150)}">Aa <span style="color:${VC.themeColors(pal, 1)[0]};margin-left:6px">voice</span></div><div class="meta"><b></b><span></span></div><button class="more" aria-label="Rename, update or delete">⋯</button>`;
     b.querySelector("b").textContent = L.name;
     b.querySelector(".meta span").innerHTML = `${escH(pp.preset)} · ${escH(pp.palette)} · ${escH(pp.font)}<span class="tag">Saved</span>`;
-    const use = () => { setP(Object.assign(VC.params(L.params), { edits: P.edits, thEdits: P.thEdits })); toast(`Using “${L.name}”`); };
+    const use = () => { setP(Object.assign(VC.params(L.params), kept())); toast(`Using “${L.name}”`); };
     b.onclick = (e) => { if (!e.target.closest(".more")) use(); };
     b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); use(); } };
     b.querySelector(".more").onclick = (e) => { e.stopPropagation(); lookSheet(L); };
@@ -568,7 +794,7 @@ function markLooks() {  // highlight the saved look in use (else the built-in on
   const btn = $("saveBtn"); btn.textContent = L ? "Saved ✓" : "Save look"; btn.title = L ? `This is your saved look “${L.name}”` : "";
 }
 function sheetOpen(html) { $("sheetBody").innerHTML = html; $("sheet").classList.add("on"); followBtn(); }
-function sheetClose() { $("sheet").classList.remove("on"); followBtn(); }
+function sheetClose() { $("sheet").classList.remove("on"); markSel(); followBtn(); }
 function uniqueName(n) { let name = n, i = 2; while (looks.some((L) => L.name === name)) name = `${n} ${i++}`; return name; }
 function saveLookSheet() {
   const L = activeLook();
@@ -608,7 +834,7 @@ function lookSheet(L) {
     const i = looks.indexOf(L); looks = looks.filter((x) => x !== L); drawLooks(); persistLooks(); sheetClose();
     toast(`Deleted “${L.name}”`, 5000, { label: "Undo", run: () => { looks.splice(Math.min(i, looks.length), 0, L); drawLooks(); persistLooks(); } });
   };
-  $("lookUse").onclick = () => { setP(Object.assign(VC.params(L.params), { edits: P.edits, thEdits: P.thEdits })); sheetClose(); };
+  $("lookUse").onclick = () => { setP(Object.assign(VC.params(L.params), kept())); sheetClose(); };
   $("lookClose").onclick = sheetClose;
 }
 $("saveBtn").onclick = saveLookSheet;
@@ -628,8 +854,8 @@ function saveEdits(now) {
 async function flush() {
   if (saving) { again = true; return; }
   saving = true;
-  const doc = { v: 1, audioId: AID, base: rev, updatedAt: Date.now(), params: recipe(), fixes, render: renderReq };
-  const summary = { base: rev, fixes: Object.keys(fixes).length, renderAt: renderReq ? renderReq.at : 0, updatedAt: doc.updatedAt };
+  const doc = { v: 1, audioId: AID, base: rev, updatedAt: Date.now(), params: recipe(), fixes, render: renderReq, glossary: GL };
+  const summary = { base: rev, fixes: Object.keys(fixes).length, glossary: GL.length, renderAt: renderReq ? renderReq.at : 0, updatedAt: doc.updatedAt };
   try { const r = await D.saveJson(studioId, AID + ".edits.json", doc, editsId, JSON.stringify(summary)); editsId = r.id; state("Saved"); }
   catch (e) { state("Not saved"); toast(e instanceof D.AuthError ? "Google sign-in expired. Open the Library to sign in again; changes stay on this screen." : "Couldn't save to Drive: " + e.message, 5200); }
   saving = false;
@@ -647,13 +873,30 @@ function renderLabel() {
   const done = CAP && CAP.video && CAP.video.at, asked = renderReq && renderReq.at > (done || 0);
   $("renderBtn").textContent = asked ? "Render requested ✓" : done ? "Render again" : "Render video";
 }
+// data = Claude's captions (base) + your word corrections + the glossary's themes + pending glossary requests
 function applyFixes() {
-  data = Object.assign({}, base, { words: base.words.map((w, i) => {
+  const themes = (base.themes || []).slice(), colors = (base.themeColors || []).slice();
+  const addTh = (n, c) => { if (n && !themes.includes(n)) { themes.push(n); colors.push(c || null); } };
+  ((GLOSS && GLOSS.themes) || []).forEach((t) => addTh(t.name, t.color));
+  GL.forEach((g) => { if (g.op === "newTheme") addTh(g.name, null); if (g.theme) addTh(g.theme, null); });
+  const words = base.words.map((w, i) => {
     if (!(i in fixes)) return w;
     const t = fixes[i], c = Object.assign({}, w, { w: t ? " " + t : "", wh: t ? " " + t : "", fl: false, fixed: true, p: 1 });
     ["lo", "lc", "la", "lp", "sy"].forEach((k) => delete c[k]);
     return c;
-  }) });
+  });
+  termOf = {};
+  const terms = (base.terms || []).map((t, j) => {
+    const g = pendingFor(t.t), st = g ? (g.op === "reject" ? "r" : "a") : t.st;
+    const th = g && g.theme ? themes.indexOf(g.theme) : t.th;
+    t.occ.forEach(([a, n]) => { for (let q = a; q < a + n; q++) {
+      termOf[q] = [j, a, n];
+      if (words[q] === base.words[q]) words[q] = Object.assign({}, base.words[q]);
+      if (st === "r") delete words[q].th; else words[q].th = th;
+    } });
+    return Object.assign({}, t, { st: t.st, th });  // st stays Claude's; statusOf() layers the pending request on top
+  });
+  data = Object.assign({}, base, { words, themes, themeColors: colors, terms });
 }
 function escH(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
 function block(html) { $("blocker").innerHTML = html; $("blocker").style.display = "block"; document.querySelector(".wrap").style.display = "none"; document.querySelector(".footer").style.display = "none"; }
@@ -665,7 +908,10 @@ async function boot() {
   try {
     state("Loading…");
     const inbox = await D.inbox(), cap = await D.findFolder("Captions", inbox);
-    const f = cap ? await D.list(`'${cap}' in parents and name = '${D.quote(AID + ".captions.json")}' and trashed = false`, "id,name,modifiedTime,description") : [];
+    const [f, gf] = cap ? await Promise.all([
+      D.list(`'${cap}' in parents and name = '${D.quote(AID + ".captions.json")}' and trashed = false`, "id,name,modifiedTime,description"),
+      D.list(`'${cap}' in parents and name = 'glossary.json' and trashed = false`, "id,modifiedTime")]) : [[], []];
+    if (gf.length) { try { GLOSS = await D.getJson(gf[0].id); localStorage.setItem("vc2-glossary", JSON.stringify(GLOSS)); } catch (e) {} }
     if (!f.length) return block(`Claude hasn't processed this recording yet. Say “process my voice notes” in Claude, then refresh the Library.`);
     CAP = await D.getJson(f[0].id); base = CAP.data; rev = CAP.rev || 1;
     document.title = (CAP.title || "Studio") + " · Studio"; $("title").textContent = CAP.title || "Studio";
@@ -678,13 +924,13 @@ async function boot() {
     if (lf.length) { looksId = lf[0].id; try { const L = await D.getJson(looksId); if (L && L.looks) { looks = L.looks; drawLooks(); } } catch (e) {} }
     let p = null;
     if (ef.length) {
-      editsId = ef[0].id; const E = await D.getJson(editsId); p = E.params || null; renderReq = E.render || null;
+      editsId = ef[0].id; const E = await D.getJson(editsId); p = E.params || null; renderReq = E.render || null; GL = Array.isArray(E.glossary) ? E.glossary : [];
       if ((E.base || 1) >= rev) fixes = E.fixes || {};
       else if (p && CAP.remap && CAP.remap.from === (E.base || 1)) { p.edits = remapKeys(p.edits, CAP.remap.map); p.thEdits = remapKeys(p.thEdits, CAP.remap.map); }
     }
     if (!p) { try { p = JSON.parse(localStorage.getItem("vc2-params") || "null"); } catch (e) {} }
     if (p) { P = VC.params(p); hist = []; fut = []; syncUI(); }
-    applyFixes(); renderLabel(); rebuild(); setTimeout(renderWords, 200);
+    applyFixes(); renderLabel(); rebuild(); whenBuilt(renderWords);
     ready = true; state(ef.length ? "Saved" : "");
   } catch (e) {
     if (e instanceof D.AuthError) return block(`Google sign-in expired. <a href="./#library">Open the Library</a> to sign in again.`);
@@ -700,7 +946,7 @@ document.fonts && document.fonts.addEventListener && document.fonts.addEventList
 requestAnimationFrame(frame);
 setTimeout(() => ($("hint").style.opacity = 0), 6000);
 boot();
-window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, get follow() { return follow; }, openWord, flush };
+window.__studio = { get fixes() { return fixes; }, get P() { return P; }, get data() { return data; }, get follow() { return follow; }, get GL() { return GL; }, get scene() { return scene; }, openWord, openTerm, flush };
 </script>
 </body>
 </html>

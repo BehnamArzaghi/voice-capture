@@ -8,6 +8,8 @@
   notes.py restore AUDIO CAPTIONS.json             rebuild WORK/ID in a fresh session (before apply/render)
   notes.py apply WORK/ID EDITS.json [--vocab FILE]  bake the studio's word corrections in (re-timed), rev+1, remap for the app
   notes.py retime AUDIO CAPTIONS.json              fix captions that drift from the audio (same words and rev; studio edits still fit)
+  notes.py glossary ROWS.json [-o glossary.json]    Notion Glossary rows -> glossary.json (themes, colors, terms)
+  notes.py tag CAPTIONS.json glossary.json [--vocab vocabulary.txt]   color glossary terms by theme; prints themes for the Notion row
   notes.py render WORK/ID EDITS.json               render the requested video (+ .srt) with the studio's look
   notes.py set WORK/ID key=value ...               set captions fields before upload (listen=<Drive id of the listening copy>)
   notes.py ref FILE                                file reference for the Drive connector's create_file (no bytes through chat)
@@ -211,6 +213,147 @@ def cmd_retime(a):
                       "next": "upload captions.json to Captions as <id>.captions.json, set its description, trash the old file"}, indent=1))
 
 
+# ---------- glossary: Notion themes + terms -> tags on the words of a transcript
+# Theme vocabulary (same names and colors as the Theme property in Notion's Substack Articles / Glossary)
+THEMES = [("Masculine/Feminine", "pink"), ("Contingency of knowing", "blue"), ("Science as worldview", "purple"), ("Re-enchantment", "green"),
+          ("Soul-making", "orange"), ("Attention economy", "red"), ("Religion & theology", "brown"), ("Ethics & politics", "gray"),
+          ("Psychology & psychotherapy", "yellow"), ("Ecology & design", "default")]
+UNVERIFIED = "[unverified — from training data]"
+
+
+def _fold(s):
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s.lower().replace("’", "'"))
+    return "".join(c for c in s if not unicodedata.combining(c))
+
+
+def _tok(s):
+    return re.sub(r"[^\w'\-]", "", _fold(s)).strip("'-")
+
+
+def _variants(term, forms):
+    out = set()
+    for v in [term] + [f.strip() for f in (forms or "").split(";") if f.strip()]:
+        seq = tuple(t for t in (_tok(x) for x in re.split(r"[\s,]+", v)) if t)
+        if not seq:
+            continue
+        out.add(seq)
+        last = seq[-1]
+        for suf in ("s", "es", "'s"):  # plural and possessive of the last word come free
+            out.add(seq[:-1] + (last + suf,))
+    return out
+
+
+def build_glossary(rows, themes=None):
+    """Notion Glossary rows (Term, Theme, Status, Forms, Definition, Source, Verified, url) -> glossary.json for the studio and tagging."""
+    themes = themes or THEMES
+    terms = []
+    for r in rows:
+        t = (r.get("Term") or "").strip()
+        if not t or r.get("Status") == "Rejected":
+            continue
+        src = (r.get("Source") or "").strip()
+        terms.append({"term": t, "theme": r.get("Theme") or "", "forms": [f.strip() for f in (r.get("Forms") or "").split(";") if f.strip()],
+                      "def": (r.get("Definition") or "").strip(), "src": src.replace(UNVERIFIED, "").strip(),
+                      "verified": r.get("Verified") in (True, "__YES__", "Yes"), "status": r.get("Status") or "Suggested", "url": r.get("url") or ""})
+    terms.sort(key=lambda x: x["term"].lower())
+    return {"v": 1, "updatedAt": int(time.time() * 1000), "themes": [{"name": n, "color": c} for n, c in themes], "terms": terms}
+
+
+def tag_data(data, G):
+    """Tag glossary terms in captions data: words get th (theme index), data.themes/themeColors list every theme in glossary order,
+    data.terms lists each term found with its occurrences [[first word, word count]]. Matching ignores filler words, case,
+    accents and punctuation; longer terms win. Returns per-theme stats."""
+    names = [t["name"] for t in G["themes"]]
+    W = data["words"]
+    for w in W:
+        w.pop("th", None)
+    idx = [i for i, w in enumerate(W) if not w.get("fl")]
+    toks = [_tok(W[i]["w"]) for i in idx]
+    pats = []
+    for k, t in enumerate(G["terms"]):
+        if t["theme"] not in names:
+            continue
+        for v in _variants(t["term"], ";".join(t["forms"])):
+            pats.append((len(v), v, k))
+    pats.sort(key=lambda p: -p[0])
+    taken = [False] * len(toks)
+    first = {}  # term index -> occurrences
+    for n, v, k in pats:
+        f0 = v[0]
+        for j in range(len(toks) - n + 1):
+            if toks[j] != f0 or any(taken[j:j + n]) or tuple(toks[j:j + n]) != v:
+                continue
+            for q in range(j, j + n):
+                taken[q] = True
+            a, b = idx[j], idx[j + n - 1]
+            first.setdefault(k, []).append([a, b - a + 1])
+    terms_out, stats = [], {}
+    for k, o in sorted(first.items(), key=lambda kv: min(x[0] for x in kv[1])):
+        t = G["terms"][k]; th = names.index(t["theme"]); o.sort()
+        for a, n in o:
+            for i in range(a, a + n):
+                if not W[i].get("fl"):
+                    W[i]["th"] = th; W[i]["fn"] = False
+        terms_out.append({"t": t["term"], "th": th, "st": "a" if t["status"] == "Accepted" else "s", "def": t["def"], "src": t["src"],
+                          "v": bool(t["verified"]), "url": t["url"], "occ": o})
+        s = stats.setdefault(t["theme"], {"occurrences": 0, "terms": []})
+        s["occurrences"] += len(o); s["terms"].append(t["term"])
+    data["themes"] = names
+    data["themeColors"] = [t["color"] for t in G["themes"]]
+    data["terms"] = terms_out
+    return stats
+
+
+def hard_to_spell(term):
+    """Names, non-English words and rare technical terms: the ones worth giving the transcriber."""
+    if any(c.isupper() for c in term) or any(ord(c) > 127 for c in term):
+        return True
+    try:
+        from wordfreq import zipf_frequency
+        return min(zipf_frequency(w, "en") for w in term.split()) < 2.6
+    except ImportError:
+        return any(len(w) >= 11 for w in term.split())
+
+
+def add_vocab(path, G):
+    """Glossary terms (their names, never the listed forms: those include mishearings) go into vocabulary.txt."""
+    have = {l.strip().lower() for l in open(path)} if os.path.exists(path) else set()
+    add = [t["term"] for t in G["terms"] if t.get("status") != "Rejected" and hard_to_spell(t["term"]) and t["term"].lower() not in have]
+    if add:
+        with open(path, "a") as f:
+            f.write(("" if open(path).read().endswith("\n") else "\n") + "\n".join(add) + "\n")
+    return add
+
+
+def note_themes(stats):
+    """Themes to suggest on the note's Notion row: 4+ tagged occurrences, or 3+ spread over 2+ different terms.
+    (A single passing name-drop does not make a theme.)"""
+    return [th for th, s in sorted(stats.items(), key=lambda kv: -kv[1]["occurrences"])
+            if s["occurrences"] >= 4 or (s["occurrences"] >= 3 and len(set(s["terms"])) >= 2)]
+
+
+def cmd_glossary(a):
+    rows = json.load(open(a.rows))
+    rows = rows.get("results", rows) if isinstance(rows, dict) else rows
+    G = build_glossary(rows)
+    json.dump(G, open(a.out, "w"), ensure_ascii=False, indent=1)
+    print(json.dumps({"glossary": a.out, "terms": len(G["terms"]), "ref": ref(a.out)}, indent=1))
+
+
+def cmd_tag(a):
+    """Tag a captions file in place (same rev: words and indices are unchanged)."""
+    G = json.load(open(a.glossary))
+    cap = json.load(open(a.captions))
+    stats = tag_data(cap["data"], G)
+    json.dump(cap, open(a.captions, "w"), separators=(",", ":"))
+    found = sorted({t["t"] for t in cap["data"]["terms"]})
+    vocab_add = add_vocab(a.vocab, G) if a.vocab else []
+    meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
+    print(json.dumps({"captions": a.captions, "captions_ref": ref(a.captions), "description": describe(meta),
+                      "terms_found": found, "themes": stats, "set_notion_themes": note_themes(stats), "vocab_added": vocab_add}, indent=1, ensure_ascii=False))
+
+
 def cmd_set(a):
     cap = json.load(open(f"{a.dir}/captions.json"))
     meta = {k: v for k, v in cap.items() if k not in ("data", "v")}
@@ -234,6 +377,8 @@ def main():
     rs = sp.add_parser("restore"); rs.add_argument("audio"); rs.add_argument("captions")
     st = sp.add_parser("set"); st.add_argument("dir"); st.add_argument("pairs", nargs="+")
     rt = sp.add_parser("retime"); rt.add_argument("audio"); rt.add_argument("captions")
+    gl = sp.add_parser("glossary"); gl.add_argument("rows"); gl.add_argument("-o", "--out", default=os.path.join(WORK, "glossary.json"))
+    tg = sp.add_parser("tag"); tg.add_argument("captions"); tg.add_argument("glossary"); tg.add_argument("--vocab")
     a = ap.parse_args()
     if a.cmd == "setup":
         sh(sys.executable, VC, "setup")
@@ -251,6 +396,10 @@ def main():
         cmd_set(a)
     elif a.cmd == "retime":
         cmd_retime(a)
+    elif a.cmd == "glossary":
+        cmd_glossary(a)
+    elif a.cmd == "tag":
+        cmd_tag(a)
     elif a.cmd == "ref":
         print(ref(a.file))
 

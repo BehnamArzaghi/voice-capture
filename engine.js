@@ -29,7 +29,8 @@
     unit: "letter", entrance: "instant", enterMs: 220, after: "live", ghost: 0, pauseBreak: 0.7, hold: 1.0,
     // live energy (0 = off): how typed letters keep answering the voice after they land
     linger: 0, ripple: 0, sway: 0, shimmer: 0, glow: 0,
-    fillers: "hide", edits: {}, thEdits: {},
+    fillers: "hide", edits: {}, thEdits: {}, thOff: [],
+    cards: 0,  // 1 = a small card with a glossary term's definition at its first appearance (verified terms)
   };
   const PRESETS = {
     Typewriter: {},
@@ -49,6 +50,7 @@
     const base = Object.assign({}, DEFAULTS, PRESETS[p.preset] || {});
     const out = Object.assign(base, p);
     out.edits = Object.assign({}, p.edits || {}); out.thEdits = Object.assign({}, p.thEdits || {});
+    out.thOff = Array.isArray(p.thOff) ? p.thOff.slice() : [];
     return out;
   }
   // ---------- color
@@ -93,6 +95,38 @@
     while (out.length < n) out.push(pal.accent);
     return out;
   }
+  /* a theme's own color, from its Notion color name: same hue in every recording, lightness chosen to read on the palette.
+     [hue, most chroma]: brown is a muted orange and gray nearly neutral, so they stay apart from orange and blue;
+     Notion's "default" (no color) gets teal, a hue no other Notion color uses */
+  const NOTION_COL = { red: [27, 0.17], orange: [62, 0.17], yellow: [95, 0.16], green: [145, 0.16], blue: [255, 0.16], purple: [305, 0.16],
+    pink: [350, 0.16], brown: [38, 0.07], gray: [250, 0.025], default: [195, 0.13] };
+  function hueColor(pal, hh, cmax) {
+    // search lighter and darker from the usual starting lightness; keep whichever passes contrast with more color left in it
+    const dark = lum(pal.bg) < 0.25, best = [];
+    for (const dir of dark ? [1, -1] : [-1, 1]) {
+      let L = dir > 0 ? 0.84 : 0.47;
+      if (dir > 0 && !dark) L = 0.9; if (dir < 0 && dark) L = 0.42;
+      for (let k = 0; k < 60; k++) {
+        let C = cmax, o = oklch(L, C, hh); while (!o.ok && C > 0.02) { C -= 0.01; o = oklch(L, C, hh); }
+        const hx = toHex(o.rgb);
+        if (contrast(hx, pal.bg) >= 3.2) { best.push({ hx, C }); break; }
+        L += dir * 0.015; if (L < 0.08 || L > 0.98) break;
+      }
+    }
+    if (!best.length) return null;
+    return (best.length > 1 && best[1].C > best[0].C + 0.03 ? best[1] : best[0]).hx;
+  }
+  function themePalette(pal, names, colors) {
+    const gold = themeColors(pal, Math.max(8, names.length));
+    return names.map((n, i) => { const c = NOTION_COL[(colors || [])[i]]; return (c && hueColor(pal, c[0], c[1])) || gold[i % gold.length]; });
+  }
+  /* a studio theme edit: a theme name (new), "" = no theme, or an index into data.themes (older edits) */
+  function themeIndex(te, themes) {
+    if (te == null) return undefined;
+    if (typeof te === "number") return te < 0 ? null : te;
+    if (te === "") return null;
+    const k = themes.indexOf(te); return k >= 0 ? k : undefined;
+  }
   // ---------- data helpers
   const b64 = (s) => { const bin = (typeof atob !== "undefined" ? atob : (x) => Buffer.from(x, "base64").toString("binary"))(s); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u; };
   function envelope(data) {
@@ -118,8 +152,11 @@
     const S = P.size * (Math.min(W, H) / 1080);
     const F = FONTS[P.font] || FONTS.Inter, [wmin, wmax] = F.w;
     const pal = PALETTES[P.palette] || PALETTES.Blush;
-    const themes = data.themes || [];
-    const tcol = themeColors(pal, Math.max(8, themes.length));
+    // themes: the recording's list (glossary order) plus any theme a studio edit names that the list lacks
+    const themes = (data.themes || []).slice(), tcolors = (data.themeColors || []).slice();
+    Object.values(P.thEdits || {}).forEach((v) => { if (typeof v === "string" && v && !themes.includes(v)) { themes.push(v); tcolors.push(null); } });
+    const tcol = themePalette(pal, themes, tcolors);
+    const thOff = new Set(P.thOff || []);
     // receding words: as close to the background as possible while keeping >= 3.4:1 contrast
     let neutral = pal.ink;
     for (let k = 0.05; k <= 0.75; k += 0.05) { const c = mix(pal.ink, pal.bg, k); if (contrast(c, pal.bg) >= 3.4) neutral = c; else break; }
@@ -154,9 +191,10 @@
       const w = { i, text, s: d.s, e: d.e, gap: d.gap || 0, vgap, fn: (!!d.fn || !!d.fl) && ed !== "emph" && ed !== "normal", th: d.th, fl: !!d.fl,
         emph: ed === "emph" || (ed !== "normal" && ed !== "quiet" && !d.fn && (d.emph || 0) >= thr), quiet: ed === "quiet",
         pitch: d.pitch, slope: d.slope || 0, stretch: d.stretch || 0, p: d.p };
-      const te = (P.thEdits || {})[i];
-      if (te != null) { w.th = te < 0 ? null : te; if (te >= 0) w.fn = false; }
+      const te = themeIndex((P.thEdits || {})[i], themes);
+      if (te !== undefined) { w.th = te; if (te != null) w.fn = false; }
       let color = pal.ink;
+      if (w.th != null && thOff.has(themes[w.th])) w.th = null;
       if (w.th != null && P.semantic > 0) color = mix(pal.ink, tcol[w.th % tcol.length], P.semantic);
       else if (w.emph && P.semantic <= 0) color = mix(pal.ink, pal.accent, 0.75);
       if (w.fn || w.quiet) color = mix(color, neutral, P.recede || (w.quiet ? 0.8 : 0));
@@ -252,7 +290,26 @@
         ph.off = nx ? Math.min(ph.end + P.hold, Math.max(ph.end + 0.05, nx.start - 0.06)) : ph.end + P.hold + 1.5;
       });
     }
-    return { W, H, S, P, pal, tcol, neutral, themes, words, phrases, lines, env, box, pitchLH, placement, duration: data.duration, onsets, cur: 0 };
+    // definition cards: a checked glossary term's definition, shown for a few seconds where the term is first heard (one at a time)
+    const cards = [];
+    if (+P.cards > 0 && data.terms) {
+      const byI = {}; words.forEach((w) => (byI[w.i] = w));
+      const first = [];
+      data.terms.forEach((t) => {
+        if (!t.v || !t.def || t.st === "r") return;
+        const o = (t.occ || []).find(([a, n]) => { for (let q = a; q < a + n; q++) if (byI[q] && byI[q].th != null) return true; return false; });
+        if (!o) return;
+        const w = byI[o[0]] || words.find((x) => x.i >= o[0]); if (!w) return;
+        first.push({ s0: w.s, term: t.t, def: t.def, src: t.src || "", color: w.th != null ? tcol[w.th % tcol.length] : pal.accent });
+      });
+      first.sort((a, b) => a.s0 - b.s0);
+      let free = -1;
+      for (const c of first) {
+        const s = Math.max(c.s0, free + 0.3); if (s - c.s0 > 12) continue;
+        c.s = s; c.e = s + clamp(1.8 + c.def.split(/\s+/).length * 0.33, 4, 8); free = c.e; cards.push(c);
+      }
+    }
+    return { W, H, S, P, pal, tcol, neutral, themes, words, phrases, lines, env, box, pitchLH, placement, duration: data.duration, onsets, cur: 0, cards };
   }
 
   // ---------- drawing
@@ -347,6 +404,35 @@
   }
   function findLast(arr, t, key) { let lo = 0, hi = arr.length - 1, best = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (arr[m][key] <= t) { best = m; lo = m + 1; } else hi = m - 1; } return best; }
   /* draw(ctx, scene, t): ctx already scaled so 1 unit = 1 output pixel. Returns hit boxes of visible words. */
+  function wrapText(ctx, text, maxW) {
+    const out = []; let line = "";
+    for (const word of String(text).split(/\s+/)) { const tryL = line ? line + " " + word : word; if (line && ctx.measureText(tryL).width > maxW) { out.push(line); line = word; } else line = tryL; }
+    if (line) out.push(line); return out;
+  }
+  function drawCards(ctx, scene, t) {
+    const { W, H, pal, box } = scene, c = scene.cards.find((x) => t >= x.s && t < x.e); if (!c) return;
+    const u = Math.min(W, H) / 1080, vertical = H > W;
+    const a = Math.min(ease((t - c.s) / 0.35), ease((c.e - t) / 0.35));
+    const cw = vertical ? W - 2 * 80 * u : Math.min(W * 0.4, 700 * u), pad = 24 * u, bar = 6 * u;
+    const x = vertical ? 80 * u : Math.max(48 * u, box.x0 - 40 * u), y = (vertical ? 110 * u : 44 * u) + (1 - a) * 10 * u;
+    const fam = '"Inter", system-ui, sans-serif', tw = cw - 2 * pad - bar;
+    if (!c.lay || c.lay.W !== W) {
+      ctx.font = `400 ${25 * u}px ${fam}`; const lines = wrapText(ctx, c.def, tw).slice(0, 5);
+      ctx.font = `400 ${18 * u}px ${fam}`; let src = c.src; while (src && ctx.measureText(src).width > tw) src = src.slice(0, -2).trimEnd() + "…";
+      if (src.length > 1 && src.endsWith("……")) src = src.slice(0, -1);
+      c.lay = { W, lines, src, h: pad * 2 + 34 * u + lines.length * 34 * u + (src ? 30 * u : 0) };
+    }
+    const h = c.lay.h, r = 14 * u;
+    ctx.save(); ctx.globalAlpha = a;
+    ctx.fillStyle = mix(pal.bg, pal.ink, 0.07); ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, cw, h, r); else ctx.rect(x, y, cw, h);
+    ctx.fill(); ctx.fillStyle = c.color; ctx.fillRect(x, y + r, bar, h - 2 * r);
+    let yy = y + pad + 26 * u; const xx = x + bar + pad; ctx.textBaseline = "alphabetic";
+    ctx.fillStyle = c.color; ctx.font = `600 ${29 * u}px ${fam}`; ctx.fillText(c.term, xx, yy); yy += 40 * u;
+    ctx.fillStyle = pal.ink; ctx.font = `400 ${25 * u}px ${fam}`; for (const L of c.lay.lines) { ctx.fillText(L, xx, yy); yy += 34 * u; }
+    if (c.lay.src) { ctx.fillStyle = scene.neutral; ctx.font = `400 ${18 * u}px ${fam}`; ctx.fillText(c.lay.src, xx, yy + 2 * u); }
+    ctx.restore();
+  }
   function draw(ctx, scene, t) {
     const { W, H, P, pal, S } = scene, boxes = [];
     { const o = scene.onsets; let lo = 0, hi = o.length - 1, k = -1; while (lo <= hi) { const m = (lo + hi) >> 1; if (o[m] <= t) { k = m; lo = m + 1; } else hi = m - 1; } scene.cur = k; }
@@ -374,9 +460,10 @@
         for (const L of ph.lines) for (const w of L.words) drawWord(ctx, w, t, scene, 0, fade, boxes);
       }
     }
+    if (scene.cards && scene.cards.length) drawCards(ctx, scene, t);
     ctx.restore();
     return boxes;
   }
-  const api = { ASPECTS, FONTS, PALETTES, DEFAULTS, PRESETS, params, buildScene, draw, themeColors, mix, contrast, clamp };
+  const api = { ASPECTS, FONTS, PALETTES, DEFAULTS, PRESETS, params, buildScene, draw, themeColors, themePalette, themeIndex, mix, contrast, clamp };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.VC = api;
 })(typeof window !== "undefined" ? window : globalThis);
