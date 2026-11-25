@@ -8,8 +8,11 @@ MP4 fragment. Each part is the original's header (ftyp + moov) plus a run of who
 fragments, so the original is part 1 followed by every later part without its header.
 The result is checked against the SHA-256 the recorder wrote into each part's
 description (pass it with --sha256); a mismatch exits with an error.
+
+Byte parts ("<name> · part 2 of 3.bin", made by the Library for imported recordings that
+aren't fragmented MP4) are plain slices: they are joined in the order their names give.
 """
-import argparse, hashlib, struct, sys
+import argparse, hashlib, re, struct, sys
 
 
 def boxes(d):
@@ -51,7 +54,10 @@ def main():
     ap.add_argument("--sha256")
     a = ap.parse_args()
     data = [open(p, "rb").read() for p in a.parts]
-    info = [header_and_seq(d) for d in data]
+    try:
+        info = [header_and_seq(d) for d in data]
+    except (ValueError, StopIteration, struct.error):
+        return join_bytes(a, data)
     seqs = [s for _, s in info]
     order = list(range(len(data)))
     if None not in seqs and len(set(seqs)) == len(seqs):
@@ -69,6 +75,22 @@ def main():
         sys.exit(f"SHA-256 mismatch: got {digest}, expected {a.sha256}")
     open(a.out, "wb").write(joined)
     print(f"wrote {a.out}  {len(joined)} bytes from {len(data)} parts  sha256 {digest}" + ("  (verified)" if a.sha256 else ""))
+
+
+def join_bytes(a, data):
+    num = [re.search(r"part (\d+) of (\d+)", p) for p in a.parts]
+    if None in num:
+        sys.exit("these parts aren't MP4 fragments, and their names don't say their order (\"part N of M\")")
+    total = {int(m.group(2)) for m in num}
+    idx = sorted(int(m.group(1)) for m in num)
+    if len(total) != 1 or idx != list(range(1, total.pop() + 1)):
+        sys.exit(f"parts missing or repeated: have {idx}")
+    joined = b"".join(d for _, d in sorted(zip([int(m.group(1)) for m in num], data)))
+    digest = hashlib.sha256(joined).hexdigest()
+    if a.sha256 and digest != a.sha256.lower():
+        sys.exit(f"SHA-256 mismatch: got {digest}, expected {a.sha256}")
+    open(a.out, "wb").write(joined)
+    print(f"wrote {a.out}  {len(joined)} bytes from {len(data)} byte parts  sha256 {digest}" + ("  (verified)" if a.sha256 else ""))
 
 
 if __name__ == "__main__":

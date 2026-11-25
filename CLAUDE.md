@@ -63,5 +63,5 @@ python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, 
 - The nightly scheduled task runs a cheap gate first: a few Drive searches compared against `Captions/library.json`. It does real work only when there is some. Keep `library.json` current, through `notes.py publish`, so the gate stays accurate.
 - The noise model is vendored at `tools/models/sh.rnnn` (GregorR/rnnoise-models, not subject to copyright), so cleaning needs no download.
 - The Drive connector uploads about 3.1 MB of file per call (the 4.2 MB request cap). `publish` keeps uploads under it.
-- The Drive connector downloads at most 10 MB per file; recordings over 9 MB also arrive as `Parts/`.
+- The Drive connector downloads at most 10 MB per file; recordings over 9 MB also arrive as `Parts/`. The recorder's own recordings are split into playable fragments; other large audio in the inbox or a folder inside it (Voice Memos imports) is split by the Library's "Prepare for Claude" into byte parts (`<name> · part N of M.bin`, appProperties `partOf`, `bytes: "1"`, `sha256`). `tools/join_parts.py` (`notes.py join`) rebuilds either kind and checks the SHA-256.
 - Theme colors come from Notion color names (`themeColors`). `engine.js` turns each name into a color that reads on the chosen palette.

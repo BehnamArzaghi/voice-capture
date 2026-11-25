@@ -23,6 +23,8 @@ SAVES = []  # bodies of every write the page sends to "Drive"
 GETS = []   # paths of every file the page downloads from "Drive"
 CLEANCOPIES = True  # whether Drive has noise-reduced copies of the recording
 CLEANDESC = True    # whether those copies carry the noise reading in their descriptions (else it comes from library.json)
+BIG = None          # bytes of a large imported recording in a folder inside the inbox (the Library splits it into Parts)
+PARTUPS = []        # metadata of every part the Library uploads
 CLEANPARTS = False  # whether the full copy is stored as byte parts (as a long recording's is), with an older incomplete set beside it
 # the Library's recordings: (id, captions title or None = not processed yet, duration, put the summary in the description?)
 LIB = [(AID, json.load(open(CAPS)).get("title"), round(json.load(open(CAPS))["duration"]), True),
@@ -44,11 +46,22 @@ async def drive(route):
     u, m = route.request.url, route.request.method
     if "fonts.g" in u: return await route.abort()
     if m != "GET":
-        SAVES.append((route.request.post_data_buffer or b"").decode("utf-8", "replace"))  # uploads may be binary (thumbnail PNG)
+        raw = route.request.post_data_buffer or b""
+        if b"uploadType=multipart" in u.encode() and b'"partOf"' in raw[:4000]:  # a byte part from the Library
+            head = raw[:4000].decode("utf-8", "replace"); meta = json.loads(head[head.index("{"):head.index("\r\n--")])
+            body = raw[raw.index(b"\r\n\r\n", raw.index(b"Content-Type", head.index("\r\n--"))) + 4:raw.rindex(b"\r\n--")]
+            PARTUPS.append(dict(meta, size=len(body), body=body))
+            return await route.fulfill(json={"id": f"P{len(PARTUPS)}"})
+        SAVES.append(raw.decode("utf-8", "replace"))  # uploads may be binary (thumbnail PNG)
         return await route.fulfill(json={"id": "SAVED", "modifiedTime": "2026-01-01T00:00:00Z"})
     p = urlparse(u); q = parse_qs(p.query).get("q", [""])[0]
     files = lambda fs: route.fulfill(json={"files": fs})
     if p.path.endswith("/files"):
+        if "mimeType = 'application/vnd.google-apps.folder'" in q and q.startswith("'") and "name =" not in q:
+            return await files([{"id": "CAPS", "name": "Captions"}, {"id": "BIGFOLDER", "name": "Over 10 MB"}])
+        if "name = 'Parts'" in q: return await files([{"id": "PARTS", "name": "Parts"}] if BIG else [])
+        if "'PARTS' in parents" in q:
+            return await files([{"id": f"P{i}", "name": x["name"], "appProperties": x["appProperties"]} for i, x in enumerate(PARTUPS)])
         if "name = 'Captions'" in q: return await files([{"id": "CAPS", "name": "Captions"}])
         if "name = 'Studio'" in q: return await files([{"id": "STUDIO", "name": "Studio"}])
         if ".captions.json" in q: return await files([{"id": "CAPFILE", "name": AID + ".captions.json"}])
@@ -62,8 +75,10 @@ async def drive(route):
                 else [{"id": "CLEANFULL", "name": AID + ".full.m4a", "description": desc("full")}]
             return await files(full + [{"id": "CLEANLIGHT", "name": AID + ".light.m4a", "description": desc("light")}] if CLEANCOPIES else [])
         if "mimeType contains 'audio/'" in q:
-            return await files([{"id": i, "name": (t or "2026-01-01 Walk") + ".m4a", "createdTime": "2026-01-01T16:07:00Z",
-                                 "appProperties": {"durationSec": str(d)}} for i, t, d, _ in LIB])
+            big = [{"id": "BIGREC", "name": "Imported memo.m4a", "createdTime": "2026-01-02T16:07:00Z", "size": str(len(BIG))}] \
+                if BIG and "'BIGFOLDER' in parents" in q else []
+            return await files(big + [{"id": i, "name": (t or "2026-01-01 Walk") + ".m4a", "createdTime": "2026-01-01T16:07:00Z",
+                                       "appProperties": {"durationSec": str(d)}} for i, t, d, _ in LIB])
         if "'CAPS' in parents" in q:
             fs = [{"id": "c" + i, "name": i + ".captions.json", "description": json.dumps({"rev": 1, "title": t, "duration": d}) if desc else ""}
                   for i, t, d, desc in LIB if t]
@@ -71,6 +86,7 @@ async def drive(route):
             return await files(fs)
         return await files([])
     GETS.append(p.path)
+    if BIG and p.path.endswith("/BIGREC"): return await route.fulfill(body=BIG, content_type="audio/x-m4a")
     if "/PART" in p.path:  # byte thirds of the fixture audio
         data = open(AUDIO, "rb").read(); n = -(-len(data) // 3); i = int(p.path[-1]) - 1
         return await route.fulfill(body=data[i * n:(i + 1) * n], content_type="application/octet-stream")

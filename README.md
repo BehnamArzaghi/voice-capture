@@ -35,6 +35,9 @@ The Library tab lists the recordings in Drive. After Claude processes them ("pro
 - `Captions/library.json`: the Library's summary of every captions file (title, rev, Notion link, video); written by `notes.py publish`.
 - `Captions/glossary.json`: a copy of the Notion **Glossary** database (themes with their Notion colors; terms with forms, definition, source, status, verified). Claude refreshes it on each run.
 
+## Large recordings
+Claude's Drive connection downloads files up to 10 MB. Recordings made in the app are also saved as pieces under 9 MB in `Parts/`. Other large audio, such as Voice Memos imports placed in the inbox or a folder inside it, shows in the Library as **Too large**; **Prepare for Claude** copies it into byte pieces in `Parts/` from the phone. Claude joins the pieces, checks them against the original's SHA-256, and processes the recording as usual. The originals are not changed.
+
 ## Noise reduction
 Recordings made while driving or walking in wind carry steady background noise. Claude makes two noise-reduced copies of each recording, using RNNoise (Valin, 2018; through ffmpeg's `arnndn`, with a model trained for speech under recording noise):
 - **Light:** most of the noise removed, some room sound kept.

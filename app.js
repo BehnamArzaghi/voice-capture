@@ -579,7 +579,53 @@
     if (t === "library") Lib.load();
   }
   $("tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-t]"); if (b) showTab(b.dataset.t); });
+  // ---------------------------------------------------------------- large recordings for Claude: a recording over 9 MB that
+  // didn't come from the recorder (a Voice Memos import, say) is copied into byte pieces in "Parts". Joined in order they are the
+  // original, checked by SHA-256 (tools/join_parts.py). Parts already in Drive are kept, so an interrupted run carries on.
+  async function uploadPiece(meta, blob) {
+    const bound = "vc" + Math.random().toString(36).slice(2);
+    const body = new Blob([`--${bound}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${bound}\r\nContent-Type: ${blob.type || "application/octet-stream"}\r\n\r\n`, blob, `\r\n--${bound}--`]);
+    const r = await api("POST", "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id", { headers: { "Content-Type": `multipart/related; boundary=${bound}` }, body });
+    if (!r.ok) throw new Error(await why(r, "part upload"));
+    return r.json();
+  }
+  async function splitForClaude(f, show) {
+    const r = await api("GET", `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media`);
+    if (!r.ok) throw new Error(await why(r, "download"));
+    const blob = await r.blob(), buf = await blob.arrayBuffer(), sha = hex(await crypto.subtle.digest("SHA-256", buf));
+    const n = Math.ceil(blob.size / PART_LIMIT), size = Math.ceil(blob.size / n), folder = await ensurePartsFolder();
+    const have = new Set((await D.list(`'${folder}' in parents and appProperties has { key='partOf' and value='${f.id}' } and trashed = false`, "id,appProperties"))
+      .filter((x) => x.appProperties && x.appProperties.sha256 === sha && +x.appProperties.parts === n).map((x) => x.appProperties.part));
+    const base = f.name.replace(/\.[^.]+$/, "");
+    for (let i = 0; i < n; i++) {
+      show(i, n);
+      if (have.has(String(i + 1))) continue;
+      await uploadPiece({
+        name: `${base} · part ${i + 1} of ${n}.bin`, parents: [folder], mimeType: "application/octet-stream",
+        description: `Byte part ${i + 1} of ${n} of “${f.name}” (Drive file ${f.id}). The original is the parts joined in order, byte for byte. SHA-256 of the original: ${sha}`,
+        appProperties: { app: "voice-capture", partOf: f.id, part: String(i + 1), parts: String(n), headerBytes: "0", bytes: "1", sha256: sha },
+      }, new Blob([blob.slice(i * size, (i + 1) * size)], { type: "application/octet-stream" }));
+    }
+  }
   const Lib = {
+    splitting: false,
+    async split() {
+      if (this.splitting) return; this.splitting = true;
+      const list = this.big || [], el = () => $("bigProgress"), btn = document.querySelector("[data-lib=split]");
+      if (btn) btn.remove();
+      try {
+        for (let k = 0; k < list.length; k++) {
+          const f = list[k], name = f.name.replace(/\.[^.]+$/, "");
+          await splitForClaude(f, (i, n) => { if (el()) el().textContent = `${k + 1} of ${list.length} · “${name}” · piece ${i + 1} of ${n}`; });
+        }
+        this.splitting = false; await this.load();
+        notice(`Ready. Say “process my voice notes” in Claude to transcribe ${list.length > 1 ? "them" : "it"}.`);
+      } catch (e) {
+        this.splitting = false;
+        if (el()) el().textContent = "Stopped: " + (e.message || e) + ". Tap again to carry on; finished pieces are kept.";
+        const card = $("bigCard"); if (card && !card.querySelector("[data-lib=split]")) card.insertAdjacentHTML("beforeend", `<button class="btn primary" data-lib="split">Carry on</button>`);
+      }
+    },
     loading: false,
     card(html, btn, act) { return `<div class="lib-card">${html}${btn ? `<button class="btn primary" data-lib="${act}">${btn}</button>` : ""}</div>`; },
     async load() {
@@ -593,9 +639,22 @@
       if (!host.querySelector(".item")) host.innerHTML = `<div class="empty">Loading…</div>`;
       try {
         const inbox = await ensureFolder();
-        const [audio, cap, studio] = await Promise.all([
-          D.list(`'${inbox}' in parents and mimeType contains 'audio/' and trashed = false`, "id,name,createdTime,size,appProperties", "createdTime desc"),
-          D.findFolder("Captions", inbox), D.findFolder("Studio", inbox)]);
+        // recordings can sit in the inbox or in a folder of his inside it (not the app's and Claude's own folders)
+        const subs = (await D.list(`'${inbox}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`, "id,name"))
+          .filter((f) => !Lib.OWN.includes(f.name));
+        const where = [inbox, ...subs.map((f) => f.id)].map((id) => `'${id}' in parents`).join(" or ");
+        const [audio, cap, studio, parts] = await Promise.all([
+          D.list(`(${where}) and mimeType contains 'audio/' and trashed = false`, "id,name,createdTime,size,appProperties", "createdTime desc"),
+          D.findFolder("Captions", inbox), D.findFolder("Studio", inbox), D.findFolder("Parts", inbox)]);
+        this.parted = {};  // Drive id -> number of parts already in Parts, when the set is complete
+        if (parts) {
+          const got = {};
+          for (const f of await D.list(`'${parts}' in parents and trashed = false`, "id,name,appProperties")) {
+            const ap = f.appProperties || {}; if (!ap.partOf) continue;
+            (got[ap.partOf] = got[ap.partOf] || { n: +ap.parts, have: new Set() }).have.add(ap.part);
+          }
+          for (const [id, g] of Object.entries(got)) if (g.have.size >= g.n) this.parted[id] = g.n;
+        }
         const [capFiles, edFiles] = await Promise.all([
           cap ? D.list(`'${cap}' in parents and trashed = false`, "id,name,modifiedTime,description") : [],
           studio ? D.list(`'${studio}' in parents and trashed = false`, "id,name,modifiedTime,description") : []]);
@@ -611,6 +670,9 @@
       } finally { this.loading = false; }
     },
     lib: {},
+    parted: {},
+    OWN: ["Captions", "Studio", "Parts", "Listening copies"],
+    tooBig(f, caps) { return !caps[f.id] && +f.size > PART_LIMIT && !this.parted[f.id]; },
     summary(a, b) {  // library.json entry vs file description: the higher rev, then the later video, wins
       if (!a) return b; if (!b || !Object.keys(b).length) return a;
       if ((a.rev || 1) !== (b.rev || 1)) return (a.rev || 1) > (b.rev || 1) ? a : b;
@@ -619,12 +681,15 @@
     render(audio, caps, eds) {
       const host = $("libBody");
       if (!audio.length) { host.innerHTML = `<div class="empty">Nothing in “${esc(conf().folderName)}” yet.</div>`; return; }
-      const waiting = audio.filter((f) => !caps[f.id]).length;
-      host.innerHTML = (waiting ? `<div class="lib-note">${waiting} recording${waiting > 1 ? "s" : ""} waiting for Claude. Say “process my voice notes” in Claude to transcribe ${waiting > 1 ? "them" : "it"}, make captions and add ${waiting > 1 ? "them" : "it"} to Notion.</div>` : "") +
+      const waiting = audio.filter((f) => !caps[f.id]).length, big = audio.filter((f) => this.tooBig(f, caps));
+      this.big = big;
+      const mb = Math.round(big.reduce((t, f) => t + +f.size, 0) / 1e6);
+      host.innerHTML = (big.length ? `<div class="lib-card" id="bigCard"><b>${big.length} recording${big.length > 1 ? "s are" : " is"} too large for Claude to download.</b> Claude's Drive connection takes files up to 10 MB. The app can copy ${big.length > 1 ? "them" : "it"} into pieces under 9 MB in “Parts”, which Claude joins back together. This downloads and uploads about ${mb * 2} MB; Wi-Fi is better. The originals stay as they are.<div class="meta" id="bigProgress"></div>${this.splitting ? "" : `<button class="btn primary" data-lib="split">Prepare for Claude</button>`}</div>` : "") +
+        (waiting ? `<div class="lib-note">${waiting} recording${waiting > 1 ? "s" : ""} waiting for Claude. Say “process my voice notes” in Claude to transcribe ${waiting > 1 ? "them" : "it"}, make captions and add ${waiting > 1 ? "them" : "it"} to Notion.</div>` : "") +
         audio.map((f) => {
           const c = caps[f.id], cm = c ? this.summary(this.lib[f.id], D.meta(c.description)) : {}, em = eds[f.id] ? D.meta(eds[f.id].description) : {};
           const asked = em.renderAt && em.renderAt > (cm.videoAt || 0), pending = em.fixes && (em.base || 1) >= (cm.rev || 1);
-          const badge = !c ? `<span class="badge b-wait">Waiting for Claude</span>` : asked ? `<span class="badge b-go">Render requested</span>` : cm.videoId ? `<span class="badge b-video">Video ready</span>` : `<span class="badge b-ready">Ready to tune</span>`;
+          const badge = this.tooBig(f, caps) ? `<span class="badge b-err">Too large</span>` : !c ? `<span class="badge b-wait">Waiting for Claude</span>` : asked ? `<span class="badge b-go">Render requested</span>` : cm.videoId ? `<span class="badge b-video">Video ready</span>` : `<span class="badge b-ready">Ready to tune</span>`;
           const dur = (f.appProperties && +f.appProperties.durationSec) || cm.duration || 0;
           const name = (cm.title || f.name.replace(/\.[^.]+$/, ""));
           const notes = [when(Date.parse(f.createdTime)), dur ? fmtDur(dur) : "", pending ? `${em.fixes} correction${em.fixes > 1 ? "s" : ""} for Claude` : ""].filter(Boolean).join(" · ");
@@ -639,6 +704,7 @@
     if (e.target.closest("a")) return;
     if (b && b.dataset.lib === "connect") { S.set("tab", "library"); Auth.signIn(false); return; }
     if (b && b.dataset.lib === "retry") { Lib.load(); return; }
+    if (b && b.dataset.lib === "split") { Lib.split(); return; }
     if (it && it.dataset.ready === "1") location.href = "studio.html?id=" + encodeURIComponent(it.dataset.aid);
   });
   $("libRefresh").onclick = () => Lib.load();

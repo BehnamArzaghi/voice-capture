@@ -41,6 +41,28 @@ async def t_library(p, base):
         await pg.screenshot(path=f"{H.OUT}/library_{name}.png")
         C(not errs, f"library {name}: no page errors", errs); await b.close()
     H.LIBJSON = ""
+    # a large imported recording: the Library offers to split it into byte parts for Claude, and they join back exactly
+    H.BIG = os.urandom(2_500_123); H.PARTUPS.clear()
+    b, pg, errs = await H.page(p, 390, 844, True)
+    await pg.add_init_script("window.VC_CONFIG = {partLimit: 1000000}")
+    await pg.goto(f"{base}/index.html#library"); await pg.wait_for_selector("#bigCard", timeout=15000); await pg.wait_for_timeout(300)
+    C(await pg.eval_on_selector_all("#libBody .badge.b-err", "e => e.map(x => x.textContent)") == ["Too large"], "library: a recording over the limit in a folder inside the inbox is marked too large")
+    await pg.screenshot(path=f"{H.OUT}/library_big.png")
+    await pg.click("[data-lib=split]"); await pg.wait_for_function("!document.getElementById('bigCard')", timeout=20000)
+    ups = sorted(H.PARTUPS, key=lambda x: int(x["appProperties"]["part"]))
+    import hashlib
+    C(len(ups) == 3 and all(x["appProperties"]["partOf"] == "BIGREC" and x["parents"] == ["PARTS"] for x in ups)
+      and b"".join(x["body"] for x in ups) == H.BIG and ups[0]["appProperties"]["sha256"] == hashlib.sha256(H.BIG).hexdigest(),
+      "library: the recording is uploaded as byte parts that join back exactly", [(x["name"], x["size"]) for x in ups])
+    C(not await pg.query_selector("#libBody .badge.b-err"), "library: once its parts are in Drive it waits for Claude like any recording")
+    d = tempfile.mkdtemp(); paths = []
+    for x in reversed(ups): pth = os.path.join(d, x["name"]); open(pth, "wb").write(x["body"]); paths.append(pth)
+    r = subprocess.run([sys.executable, os.path.join(H.REPO, "tools", "join_parts.py"), os.path.join(d, "out.m4a"), *paths, "--sha256", ups[0]["appProperties"]["sha256"]], capture_output=True, text=True)
+    C(r.returncode == 0 and open(os.path.join(d, "out.m4a"), "rb").read() == H.BIG, "library: join_parts.py rebuilds the original from byte parts", r.stdout + r.stderr)
+    n = len(H.PARTUPS); await pg.evaluate("window.__vc.Lib.load()"); await pg.wait_for_timeout(600)
+    C(len(H.PARTUPS) == n, "library: parts already in Drive are not uploaded again")
+    C(not errs, "library: no page errors while splitting", errs); await b.close()
+    H.BIG = None; H.PARTUPS.clear()
 
 
 async def t_looks(p, base):
