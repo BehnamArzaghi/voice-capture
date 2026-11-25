@@ -187,8 +187,10 @@ def cmd_apply(a):
     sh(sys.executable, VC, "fix", d, "--text", _tmp(" ".join(toks)))
     data = json.load(open(f"{d}/data.json"))
     remap = {str(o): n for n, o in enumerate(src) if o >= 0}
-    new_terms = sorted({t.strip(".,;:!?\"'()") for i in fixes for t in fixes[i].split()
-                        if t[:1].isupper() or not re.fullmatch(r"[a-z']+", t.strip(".,;:!?\"'()").lower() or "x") or len(t) > 9} - {""})
+    # only names and rare words go to the transcriber; emoji, punctuation, case changes and everyday words would skew it
+    old_words = {old[i]["w"].strip(".,;:!?\"'()").lower() for i in fixes if 0 <= i < len(old)}
+    new_terms = sorted({t for t in (x.strip(".,;:!?\"'()…") for i in fixes for x in fixes[i].split())
+                        if vocab_worthy(t) and t.lower() not in old_words})
     if a.vocab:
         have = set(vocab_prompt(a.vocab).rstrip(".").split(", ")) if vocab_prompt(a.vocab) else set()
         add = [t for t in new_terms if t not in have]
@@ -428,6 +430,19 @@ def hard_to_spell(term):
         return min(zipf_frequency(w, "en") for w in term.split()) < 2.6
     except ImportError:
         return any(len(w) >= 11 for w in term.split())
+
+
+def vocab_worthy(t):
+    """A word from a studio correction that is worth giving the transcriber: letters only (no emoji or marks), written in ordinary
+    or title case, and a name or a rare word. "That", "symptoms" or "💕" are not."""
+    if len(t) < 3 or not re.fullmatch(r"[^\W\d_]+(?:['’-][^\W\d_]+)*", t) or not (t.islower() or t.istitle()):
+        return False
+    try:
+        from wordfreq import zipf_frequency
+        z = zipf_frequency(t.lower(), "en")
+        return z < 2.6 or (t.istitle() and z < 3.2)
+    except ImportError:
+        return len(t) >= 11
 
 
 def add_vocab(path, G):

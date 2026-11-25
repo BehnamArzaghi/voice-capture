@@ -53,6 +53,8 @@ C([n for n, _ in parts] == [FX["aid"] + f".full.m4a.p{i}of3" for i in (1, 2, 3)]
   and b"".join(open(pp, "rb").read() for _, pp in parts) == open(big, "rb").read()
   and all(os.path.getsize(pp) <= notes.PART_MAX for _, pp in parts), "clean: a copy over the upload limit splits into parts that join back exactly")
 C(notes.split_parts(files["full"], "x.full.m4a") == [("x.full.m4a", files["full"])], "clean: a copy within the limit uploads whole")
+C([t for t in ("That", "💕", "thing-ness", "✨literal✨", "framework", "Hillman", "Vaihinger", "i.e") if notes.vocab_worthy(t)] == ["Hillman", "Vaihinger"],
+  "apply: only names and rare words from corrections go to the transcriber's vocabulary")
 import numpy as np, vc  # noqa: E402
 rng = np.random.default_rng(1); sr = 16000; x = rng.normal(0, 0.01, sr * 20).astype(np.float32)
 words = [{"s": t, "e": t + 0.5} for t in np.arange(0.5, 19, 1.0)]

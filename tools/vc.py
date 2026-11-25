@@ -566,7 +566,7 @@ def arbitrate(words, prop, moved, x, model, lang=None, tol=0.8):
         if not verdict:
             if dec is None:
                 from pocketsphinx import Decoder
-                dec = Decoder(samprate=SR, bestpath=False, loglevel="FATAL", beam=1e-100, wbeam=1e-80, pbeam=1e-100)
+                dec = _decoder(Decoder)
             L = max(oe - os_, pe - ps) + 1.5
             toks = [words[k]["w"].strip() for k in range(i, j)]
             fo, fp = _acoustic_fit(x, toks, os_ - 0.75, os_ - 0.75 + L, dec), _acoustic_fit(x, toks, ps - 0.75, ps - 0.75 + L, dec)
@@ -845,6 +845,17 @@ def _silences(x, min_len=0.25):
     return out
 
 
+_DEC = []
+
+
+def _decoder(Decoder):
+    """One pocketsphinx decoder per process: each new one keeps its acoustic model in memory, and a long recording's
+    re-alignment pass makes hundreds of calls (that ran out of memory on 16–30 minute notes)."""
+    if not _DEC:
+        _DEC.append(Decoder(samprate=SR, bestpath=False, loglevel="FATAL", beam=1e-100, wbeam=1e-80, pbeam=1e-100))
+    return _DEC[0]
+
+
 def force_align(x, tokens, anc_s, anc_e, anchored, chunk_min=10.0, chunk_max=30.0, quiet=False):
     """Align tokens (fillers included) to 16 kHz float audio with PocketSphinx, in chunks cut at silences between anchored words.
     A chunk that fails is split at an inner silence and retried. Returns per-token (start, end) or None."""
@@ -871,7 +882,7 @@ def force_align(x, tokens, anc_s, anc_e, anchored, chunk_min=10.0, chunk_max=30.
         if t - last >= chunk_min and k > cuts[-1][0]:
             cuts.append((k, t)); last = t
     cuts.append((len(tokens), dur))
-    dec = Decoder(samprate=SR, bestpath=False, loglevel="FATAL", beam=1e-100, wbeam=1e-80, pbeam=1e-100)
+    dec = _decoder(Decoder)
     pcm = (np.clip(x, -1, 1) * 32767).astype(np.int16)
     res = [None] * len(tokens)
     stats = {"ok": 0, "fail": 0}
@@ -881,7 +892,10 @@ def force_align(x, tokens, anc_s, anc_e, anchored, chunk_min=10.0, chunk_max=30.
         for k in range(i0, i1):
             for dw in _dict_words(tokens[k]):
                 if not dec.lookup_word(dw):
-                    dec.add_word(dw, _g2p(dw), True)
+                    try:
+                        dec.add_word(dw, _g2p(dw), True)
+                    except RuntimeError:  # no pronunciation for it (digits, symbols): leave this stretch on Whisper's timing
+                        return False
                 words.append(dw); owner.append(k)
         if not words:
             return True
