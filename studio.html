@@ -161,6 +161,16 @@
   .sel-row .w { flex:1; margin:0; text-align:center; }
   .ext { width:38px; height:38px; border-radius:19px; border:1px solid var(--line); background:var(--card); font:600 16px "Inter"; color:var(--ink); cursor:pointer; flex:none; }
   .ext:disabled { color:var(--ink3); }
+  /* word sheet: Emphasis and Theme fold away until opened */
+  .fold { border-top:1px solid var(--line); margin-top:14px; }
+  .fold + .fold { margin-top:0; }
+  .fold > summary { list-style:none; display:flex; align-items:center; gap:8px; min-height:46px; cursor:pointer; font:600 11px/1 "Inter"; letter-spacing:.08em; text-transform:uppercase; color:var(--ink3); -webkit-tap-highlight-color:transparent; }
+  .fold > summary::-webkit-details-marker { display:none; }
+  .fold > summary .val { margin-left:auto; font:500 13px/1 "Inter"; letter-spacing:0; text-transform:none; color:var(--ink2); display:flex; align-items:center; }
+  .fold > summary::after { content:""; width:7px; height:7px; border-right:1.5px solid var(--ink3); border-bottom:1.5px solid var(--ink3); transform:rotate(45deg) translate(-2px, -2px); transition:transform .2s var(--ease); margin:0 4px 0 6px; }
+  .fold[open] > summary::after { transform:rotate(225deg) translate(-2px, -2px); }
+  .fold > .in { padding:0 0 14px; }
+  .fold .grow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:0 0 10px; }
   .words span.sug { text-decoration:underline dashed; text-decoration-thickness:1px; text-underline-offset:5px; }
   .words span.insel { background:#E1EAF3; }
   .sheet { max-height:84vh; overflow:auto; }
@@ -513,6 +523,7 @@ function frame() {
 // in this recording's edits: theme tags by word (P.thEdits, by theme name; "" = none) and glossary requests (GL), which Claude
 // applies in Notion on its next run.
 let GLOSS = null, GL = [], termOf = {}, selA = -1, selB = -1, selI = -1, scope = "here";
+let folds = {};  // which word-sheet sections are open; they start closed each time the sheet opens
 try { GLOSS = JSON.parse(localStorage.getItem("vc2-glossary") || "null"); } catch (e) {}
 const tokN = (s) => String(s || "").toLowerCase().normalize("NFKD").replace(/[̀-ͯ]/g, "").replace(/[’‘]/g, "'").replace(/[^\p{L}\p{N}'\-]/gu, "").replace(/^['-]+|['-]+$/g, "");
 const seqOf = (s) => String(s || "").split(/[\s,]+/).map(tokN).filter(Boolean);
@@ -679,6 +690,15 @@ function toCur(el, smooth) {
   autoUntil = performance.now() + (smooth ? 900 : 250);
   window.scrollBy({ top: dy, behavior: smooth && Math.abs(dy) < (bot - top) * 1.5 ? "smooth" : "auto" });
 }
+function selInView() {  // keep the selected words in sight above the word sheet while stepping through them
+  const el = $("w" + selA); if (!el || !wordsOn()) return;
+  let [top, bot] = viewBand();
+  if (!DESK.matches && $("sheet").classList.contains("on")) bot = Math.min(bot, $("sheet").getBoundingClientRect().top - 8);
+  const r = el.getBoundingClientRect();
+  if (r.top >= top + 6 && r.bottom <= bot - 6) return;
+  autoUntil = performance.now() + 900;
+  window.scrollBy({ top: r.top + r.height / 2 - (top + Math.max(top + 40, bot)) / 2, behavior: "smooth" });
+}
 function setFollow(v, scroll) {
   follow = v;
   if (v && scroll) { const el = $("w" + lastW); if (el) toCur(el, false); }
@@ -703,6 +723,14 @@ function userScrolled(e) {
 window.addEventListener("wheel", userScrolled, { passive: true });
 window.addEventListener("touchmove", userScrolled, { passive: true });
 window.addEventListener("keydown", (e) => { if (/^(ArrowUp|ArrowDown|PageUp|PageDown|Home|End)$/.test(e.key) && !/INPUT|TEXTAREA/.test(e.target.tagName)) userScrolled(); });
+// Keyboard in an open sheet: Esc closes; ← → step to the previous or next word (or mention); Shift+← → add a word to the phrase.
+window.addEventListener("keydown", (e) => {
+  if (!$("sheet").classList.contains("on") || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+  if (e.key === "Escape") { e.preventDefault(); sheetClose(); return; }
+  if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || !/^Arrow(Left|Right)$/.test(e.key)) return;
+  const L = e.key === "ArrowLeft", b = e.shiftKey ? $(L ? "selL" : "selR") : $(L ? "wPrev" : "wNext") || $(L ? "tPrev" : "tNext");
+  if (b && !b.disabled) { e.preventDefault(); b.click(); }
+});
 window.addEventListener("scroll", () => { if (performance.now() > autoUntil) userScrolled(); followBtn(); }, { passive: true });
 $("follow").onclick = () => setFollow(true, true);
 function markWord(force) {
@@ -759,23 +787,33 @@ function openWord(i, a, b) {
     : scope === "all" ? `Every “${escH(text)}” in this recording (${n}).`
     : T ? `Every “${escH(text)}” here (${n}); Claude sets this theme on “${escH(T.t)}” in your Notion glossary on its next run (None removes it).`
     : `Every “${escH(text)}” here (${n}); Claude adds it to your Notion glossary with this theme on its next run.`;
-  sheetOpen(`<div class="sel-row"><button class="ext" id="selL" aria-label="Add the word before" ${stepWord(a, -1) < 0 ? "disabled" : ""}>‹</button>
+  const EDS = [["auto", "Auto"], ["emph", "Emphasize"], ["normal", "Normal"], ["quiet", "Quieter"]];
+  const edLabel = (EDS.find(([v]) => v === ed) || [0, "Mixed"])[1];
+  const thLabel = curTh === null ? "None" : curTh === undefined ? "Mixed" : `<i class="dot" style="background:${thColor(curTh)}"></i>${escH(ths[curTh] || "")}`;
+  const prevW = stepWord(a, -1), nextW = stepWord(b, 1);
+  sheetOpen(`<div class="sel-row"><button class="ext" id="wPrev" aria-label="Previous word" title="Previous word (←)" ${prevW < 0 ? "disabled" : ""}>‹</button>
       <div class="w">${escH(one ? shown || orig : text)}${one && i in fixes ? ` <span class="muted" style="font-weight:400;font-size:13px">was “${escH(orig)}”</span>` : ""}</div>
-      <button class="ext" id="selR" aria-label="Add the next word" ${stepWord(b, 1) < 0 ? "disabled" : ""}>›</button></div>
+      <button class="ext" id="wNext" aria-label="Next word" title="Next word (→)" ${nextW < 0 ? "disabled" : ""}>›</button></div>
     ${!one ? `<div class="row" style="justify-content:center;margin:-2px 0 8px"><button class="chip" id="selOne">Just “${escH(orig)}”</button></div>` : ""}
     ${T ? termCard(T) : ""}
     ${one ? `<h2>Correct the word</h2>
-    <div class="fixrow"><input class="name" id="fixIn" value="${escH(shown)}" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done"><button class="chip" id="fixSave">Save</button></div>
+    <div class="fixrow"><input class="name" id="fixIn" value="${escH(shown)}" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false" enterkeyhint="done" aria-label="Correct the word; Enter saves and closes"><button class="chip" id="fixSave">Save</button></div>
     <div class="row" style="margin-top:8px"><button class="chip" id="fixDel">Remove word</button>${i in fixes ? `<button class="chip" id="fixUndo">Undo correction</button>` : ""}</div>` : ""}
-    <h2>Emphasis</h2><div class="seg" id="edSeg">${[["auto", "Auto"], ["emph", "Emphasize"], ["normal", "Normal"], ["quiet", "Quieter"]].map(([v, l]) => `<button data-v="${v}" class="${ed === v ? "on" : ""}">${l}</button>`).join("")}</div>
-    <h2>Theme</h2>
-    <div class="seg" id="scopeSeg">${[["here", "Here"], ["all", "Whole recording"], ["gloss", "+ Glossary"]].map(([v, l]) => `<button data-v="${v}" class="${scope === v ? "on" : ""}">${l}</button>`).join("")}</div>
-    <p class="muted" style="margin:6px 0 8px">${note}</p>
-    <div class="row" id="thRow"><button class="chip ${curTh === null ? "on" : ""}" data-v="">None</button>${ths.map((nm, k) => `<button class="chip ${curTh === k ? "on" : ""}" data-v="${escH(nm)}"><i class="dot" style="background:${thColor(k)}"></i>${escH(nm)}</button>`).join("")}<button class="chip" id="newTh">+ New theme</button></div>
-    <div class="fixrow" id="newThRow" style="display:none;margin-top:8px"><input class="name" id="newThIn" placeholder="New theme name" maxlength="40" autocomplete="off" enterkeyhint="done"><button class="chip" id="newThSave">Add</button></div>
+    <details class="fold" id="foldEmph"${folds.emph ? " open" : ""}><summary>Emphasis<span class="val">${edLabel}</span></summary><div class="in">
+      <div class="seg" id="edSeg">${EDS.map(([v, l]) => `<button data-v="${v}" class="${ed === v ? "on" : ""}">${l}</button>`).join("")}</div></div></details>
+    <details class="fold" id="foldTheme"${folds.theme ? " open" : ""}><summary>Theme<span class="val">${thLabel}</span></summary><div class="in">
+      <div class="grow"><span class="muted" style="margin:0">Phrase</span><button class="chip" id="selL" ${prevW < 0 ? "disabled" : ""}>+ Word before</button><button class="chip" id="selR" ${nextW < 0 ? "disabled" : ""}>+ Next word</button></div>
+      <div class="seg" id="scopeSeg">${[["here", "Here"], ["all", "Whole recording"], ["gloss", "+ Glossary"]].map(([v, l]) => `<button data-v="${v}" class="${scope === v ? "on" : ""}">${l}</button>`).join("")}</div>
+      <p class="muted" style="margin:6px 0 8px">${note}</p>
+      <div class="row" id="thRow"><button class="chip ${curTh === null ? "on" : ""}" data-v="">None</button>${ths.map((nm, k) => `<button class="chip ${curTh === k ? "on" : ""}" data-v="${escH(nm)}"><i class="dot" style="background:${thColor(k)}"></i>${escH(nm)}</button>`).join("")}<button class="chip" id="newTh">+ New theme</button></div>
+      <div class="fixrow" id="newThRow" style="display:none;margin-top:8px"><input class="name" id="newThIn" placeholder="New theme name" maxlength="40" autocomplete="off" enterkeyhint="done"><button class="chip" id="newThSave">Add</button></div></div></details>
     <div class="row" style="margin-top:16px"><button class="btn" id="jump" style="flex:1">Play from here</button><button class="btn" id="closeS">Done</button></div>`);
   markSel();
+  [["foldEmph", "emph"], ["foldTheme", "theme"]].forEach(([id, k]) => $(id).addEventListener("toggle", () => (folds[k] = $(id).open)));
   const again = () => openWord(i, selA, selB), after = (f) => whenBuilt(() => { renderWords(); f(); });
+  const go = (q) => { if (q < 0) return; if (follow && !au.paused) setFollow(false); openWord(q); selInView(); };  // step to a neighbouring word (a glossary term opens whole)
+  $("wPrev").onclick = () => go(stepWord(selA, -1));
+  $("wNext").onclick = () => go(stepWord(selB, 1));
   $("selL").onclick = () => { const q = stepWord(selA, -1); if (q >= 0) openWord(i, q, selB); };
   $("selR").onclick = () => { const q = stepWord(selB, 1); if (q >= 0) openWord(i, selA, q); };
   if ($("selOne")) $("selOne").onclick = () => openWord(i, i, i);
@@ -812,10 +850,19 @@ function openWord(i, a, b) {
   };
   $("newThSave").onclick = addTh; $("newThIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); addTh(); } });
   if (one) {
-    const setFix = (v) => { if (v === null || v === orig) delete fixes[i]; else fixes[i] = v; applyFixes(); rebuild(); saveEdits(); after(() => openWord(i, i, i)); };
-    $("fixSave").onclick = () => setFix($("fixIn").value.replace(/\s+/g, " ").trim());
-    $("fixIn").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("fixSave").click(); } });
-    $("fixDel").onclick = () => setFix("");
+    const put = (v) => { if (v === null || v === orig) delete fixes[i]; else fixes[i] = v; applyFixes(); rebuild(); saveEdits(); };
+    const setFix = (v) => { put(v); after(() => openWord(i, i, i)); };
+    // Save, Enter and Remove word save the change and close the sheet; the toast offers Undo
+    const commit = (v) => {
+      const was = i in fixes ? fixes[i] : null;
+      if (v === (was === null ? orig : was)) { sheetClose(); return; }
+      put(v); after(() => {}); sheetClose();
+      const msg = v === "" ? `Removed “${orig}”` : v === orig ? `Back to “${orig}”` : `“${orig}” → “${v}”`;
+      toast(msg, 4200, { label: "Undo", run: () => { put(was); whenBuilt(() => renderWords()); } });
+    };
+    $("fixSave").onclick = () => commit($("fixIn").value.replace(/\s+/g, " ").trim());
+    $("fixIn").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); $("fixSave").click(); } });
+    $("fixDel").onclick = () => commit("");
     if ($("fixUndo")) $("fixUndo").onclick = () => setFix(null);
   }
   $("jump").onclick = () => { au.currentTime = Math.max(0, data.words[selA].s - 1.5); sheetClose(); follow = true; au.play().catch(() => {}); };
@@ -1077,7 +1124,10 @@ function markLooks() {  // highlight the saved look in use (else the built-in on
   const btn = $("saveBtn"); btn.textContent = L ? "Saved ✓" : "Save look"; btn.title = L ? `This is your saved look “${L.name}”` : "";
 }
 function sheetOpen(html) { $("sheetBody").innerHTML = html; $("sheet").classList.add("on"); followBtn(); }
-function sheetClose() { $("sheet").classList.remove("on"); markSel(); followBtn(); }
+function sheetClose() {
+  const f = document.activeElement; if (f && $("sheet").contains(f)) f.blur();  // drops the phone keyboard with the sheet
+  $("sheet").classList.remove("on"); folds = {}; markSel(); followBtn();
+}
 function uniqueName(n) { let name = n, i = 2; while (looks.some((L) => L.name === name)) name = `${n} ${i++}`; return name; }
 function saveLookSheet() {
   const L = activeLook();

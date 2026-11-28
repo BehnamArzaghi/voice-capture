@@ -2,7 +2,7 @@
 """Browser tests for the Library (index.html) and the caption studio (studio.html).
 
   python3 tests/run_tests.py            all tests; screenshots go to tests/shots/
-  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, cards, requests, thumb, sound)
+  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, words, cards, requests, thumb, sound)
 
 Needs Playwright for Python and the Chrome that `tools/vc.py setup` installs. Exits non-zero when a check fails.
 """
@@ -128,6 +128,7 @@ async def t_themes(p, base):
         C(await pg.eval_on_selector_all("#words span.sug", "e => e.length") > 0, f"themes {name}: suggested terms are underlined in Words")
         i = await pg.evaluate("window.__studio.data.words.findIndex(w => /^rhizome/i.test(w.w.trim()))")
         await pg.evaluate(f"window.__studio.openWord({i})"); await pg.wait_for_timeout(300)
+        await pg.click("#foldTheme summary"); await pg.wait_for_timeout(150)
         await pg.click("#scopeSeg [data-v=gloss]"); await pg.wait_for_timeout(150)
         await pg.click('#thRow [data-v="Re-enchantment"]'); await pg.wait_for_timeout(500)
         n = await pg.evaluate("Object.values(window.__studio.P.thEdits).filter(v => v === 'Re-enchantment').length")
@@ -135,7 +136,8 @@ async def t_themes(p, base):
         C(await pg.evaluate("window.__studio.GL.some(g => g.op === 'add' && g.term === 'rhizome')"), f"themes {name}: + Glossary makes an add request")
         await pg.screenshot(path=f"{H.OUT}/word_{name}.png")
         await pg.click("#scopeSeg [data-v=here]"); await pg.click("#selR"); await pg.wait_for_timeout(200)
-        C(len((await pg.inner_text("#sheetBody .sel-row .w")).split()) == 2, f"themes {name}: › widens the selection to a phrase")
+        C(len((await pg.inner_text("#sheetBody .sel-row .w")).split()) == 2, f"themes {name}: + Next word widens the selection to a phrase")
+        C(await pg.evaluate("document.getElementById('foldTheme').open"), f"themes {name}: the Theme section stays open while tagging")
         await pg.click("#newTh"); await pg.fill("#newThIn", "Process philosophy"); await pg.click("#newThSave"); await pg.wait_for_timeout(500)
         C(await pg.inner_text("#thRow .chip.on") == "Process philosophy", f"themes {name}: a new theme can be created and applied")
         await pg.click("#closeS"); await pg.click("#tabs [data-t=voice]"); await pg.wait_for_timeout(200)
@@ -146,6 +148,60 @@ async def t_themes(p, base):
         doc = json.loads(body[body.index('{"v":1,"audioId"'):body.rindex("}") + 1]) if body else {}
         C({g["op"] for g in doc.get("glossary", [])} == {"accept", "add", "newTheme"}, f"themes {name}: glossary requests saved in edits.json", doc.get("glossary"))
         C(not errs, f"themes {name}: no page errors", errs); await b.close()
+
+
+async def t_words(p, base):
+    """The word sheet: ‹ › step between words, Enter saves a correction and closes, Emphasis and Theme start folded."""
+    pick = """() => { const S = __studio, W = S.data.words, inT = new Set();
+      (S.data.terms || []).forEach(t => t.occ.forEach(([a, n]) => { for (let q = a; q < a + n; q++) inT.add(q); }));
+      const ok = (q) => q >= 0 && q < W.length && !W[q].fl && W[q].w.trim();
+      const step = (q, d) => { q += d; while (q >= 0 && q < W.length && !ok(q)) q += d; return q; };
+      for (let i = 10; i < W.length - 10; i++) { const a = step(i, -1), b = step(i, 1); if (ok(i) && ![a, i, b].some(q => inT.has(q))) return [a, i, b]; } }"""
+    for name, w, h, mob in (("desk", 1440, 900, False), ("phone", 390, 844, True)):
+        b, pg, errs = await open_studio(p, base, w, h, mob)
+        await pg.click("#tabs [data-t=words]"); await pg.wait_for_timeout(300)
+        a, i, n = await pg.evaluate(pick)
+        word = lambda q: pg.evaluate(f"__studio.data.words[{q}].w.trim()")
+        shown = lambda: pg.inner_text("#sheetBody .sel-row .w")
+        is_open = lambda: pg.evaluate("document.getElementById('sheet').classList.contains('on')")
+        folded = lambda: pg.evaluate("!document.getElementById('foldEmph').open && !document.getElementById('foldTheme').open")
+        await pg.evaluate(f"__studio.openWord({i})"); await pg.wait_for_timeout(350)
+        C(await folded(), f"words {name}: Emphasis and Theme start folded")
+        C(await pg.inner_text("#foldEmph .val") == "Auto", f"words {name}: the folded Emphasis row shows its setting")
+        await pg.screenshot(path=f"{H.OUT}/wordsheet_{name}.png")
+        await pg.click("#wNext"); await pg.wait_for_timeout(250)
+        C(await shown() == await word(n), f"words {name}: › moves to the next word", [await shown(), await word(n)])
+        C(await pg.evaluate(f"document.getElementById('w{n}').classList.contains('insel') && !document.getElementById('w{i}').classList.contains('insel')"), f"words {name}: only the new word is marked")
+        await pg.click("#wPrev"); await pg.click("#wPrev"); await pg.wait_for_timeout(250)
+        C(await shown() == await word(a), f"words {name}: ‹ moves to the previous word", [await shown(), await word(a)])
+        await pg.keyboard.press("ArrowRight"); await pg.wait_for_timeout(250)
+        C(await shown() == await word(i), f"words {name}: the → key moves to the next word", [await shown(), await word(i)])
+        await pg.click("#foldTheme summary"); await pg.click('#thRow [data-v="Re-enchantment"]'); await pg.wait_for_timeout(500)
+        C(await pg.evaluate("document.getElementById('foldTheme').open"), f"words {name}: an opened section stays open after a change")
+        C("Re-enchantment" in await pg.inner_text("#foldTheme .val"), f"words {name}: the Theme row shows the new theme")
+        await pg.keyboard.press("Escape"); await pg.wait_for_timeout(250)
+        C(not await is_open(), f"words {name}: Esc closes the sheet")
+        await pg.evaluate(f"__studio.openWord({i})"); await pg.wait_for_timeout(300)
+        C(await folded(), f"words {name}: sections are folded again when the sheet reopens")
+        orig = await word(i)
+        await pg.fill("#fixIn", "Testword"); await pg.press("#fixIn", "Enter"); await pg.wait_for_timeout(500)
+        st = await pg.evaluate(f"() => ({{fix: __studio.fixes[{i}], span: document.getElementById('w{i}').textContent, focus: document.activeElement.id}})")
+        C(not await is_open() and st["fix"] == "Testword" and st["span"] == "Testword", f"words {name}: Enter saves the correction and closes the sheet", st)
+        C(st["focus"] != "fixIn", f"words {name}: closing drops focus from the field (the phone keyboard goes away)")
+        await pg.screenshot(path=f"{H.OUT}/wordsheet_saved_{name}.png")
+        await pg.click("#toast .toast-act"); await pg.wait_for_timeout(500)
+        st = await pg.evaluate(f"() => ({{has: {i} in __studio.fixes, span: document.getElementById('w{i}').textContent}})")
+        C(not st["has"] and st["span"] == orig, f"words {name}: Undo in the message brings the word back", st)
+        await pg.evaluate(f"__studio.openWord({i})"); await pg.wait_for_timeout(300)
+        await pg.press("#fixIn", "Enter"); await pg.wait_for_timeout(300)
+        C(not await is_open() and not await pg.evaluate(f"{i} in __studio.fixes"), f"words {name}: Enter on an unchanged word just closes")
+        await pg.evaluate(f"__studio.openWord({i})"); await pg.wait_for_timeout(300)
+        await pg.click("#fixDel"); await pg.wait_for_timeout(500)
+        C(not await is_open() and await pg.evaluate(f"__studio.fixes[{i}]") == "", f"words {name}: Remove word saves and closes too")
+        await pg.click("#toast .toast-act"); await pg.wait_for_timeout(400)
+        C(not await pg.evaluate(f"{i} in __studio.fixes"), f"words {name}: Undo restores a removed word")
+        await pg.evaluate("window.__studio.flush()"); await pg.wait_for_timeout(400)
+        C(not errs, f"words {name}: no page errors", errs); await b.close()
 
 
 async def t_cards(p, base):
@@ -292,7 +348,7 @@ async def t_sound(p, base):
     H.CLEANCOPIES = True
 
 
-GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "cards": t_cards, "requests": t_requests, "thumb": t_thumb, "sound": t_sound}
+GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "words": t_words, "cards": t_cards, "requests": t_requests, "thumb": t_thumb, "sound": t_sound}
 
 
 async def main(names):
