@@ -24,7 +24,7 @@ Behnam Arzaghi's voice recorder and caption studio. It is an iPhone web app on G
 ```bash
 python3 tests/test_tools.py        # pipeline checks, a few seconds
 python3 tests/run_tests.py         # browser tests, about 1 minute; screenshots in tests/shots/
-python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, words, cards, requests, thumb, sound
+python3 tests/run_tests.py themes  # one group: library, looks, follow, themes, words, phrasing, cards, requests, thumb, sound
 ```
 - The tests serve the repo locally and stand in for Google Drive with local files. They need Playwright for Python and a Chrome or Chromium: `python3 tools/notes.py setup` installs them, or `pip install playwright && playwright install chromium`.
 - Look at the screenshots for anything visual. Check both a phone viewport (390×844) and a desktop one (1440×900).

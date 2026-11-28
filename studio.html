@@ -260,6 +260,7 @@
     <h2>Live energy</h2><p class="muted" style="margin:-2px 0 10px">How the words already on screen keep answering your voice. Pick a direction, then tune it.</p>
     <div class="row" id="directions"></div><p class="muted" id="dirNote" style="margin:10px 0 0;min-height:18px"></p>
     <div id="live-sliders" style="margin-top:4px"></div>
+    <h2>Phrases follow</h2><div class="seg" id="phrasing"></div><p class="muted" id="phrasingNote" style="margin:6px 0 0"></p>
     <div id="motion-sliders" style="margin-top:12px"></div>
   </section>
   <section class="panel" id="p-words">
@@ -402,6 +403,7 @@ function build() {
   seg($("aspect"), "aspect", [["16:9", "16:9"], ["9:16", "9:16"], ["1:1", "1:1"], ["4:5", "4:5"]]);
   seg($("unit"), "unit", [["letter", "Letter"], ["syllable", "Syllable"], ["word", "Word"]]);
   seg($("after"), "after", [["live", "Live"], ["settle", "Settle"], ["breathe", "Breathe"]]);
+  seg($("phrasing"), "phrasing", [["pause", "Pauses"], ["syntax", "Syntax"]]);
   seg($("fillers"), "fillers", [["hide", "Hidden"], ["show", "Shown"]]);
   seg($("cards"), "cards", [["0", "Off"], ["1", "Checked terms"]]);
   seg($("denoise"), "denoise", [["off", "Original"], ["light", "Light"], ["full", "Full"]]);
@@ -430,13 +432,23 @@ function syncUI() {
   const dir = DIRECTIONS.find((d) => P.after === "live" && Object.entries(d.v).every(([k, v]) => Math.abs((+P[k] || 0) - v) < 0.001));
   document.querySelectorAll("#directions [data-dir]").forEach((b) => b.classList.toggle("on", !!dir && b.dataset.dir === dir.name));
   $("dirNote").textContent = dir ? dir.note : ["linger", "ripple", "sway", "shimmer", "glow"].some((k) => +P[k] > 0) ? "Your own mix." : "";
-  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("entrance", P.entrance); on("fillers", P.fillers); on("cards", String(+P.cards || 0)); syncSound();
+  on("palettes", P.palette); on("fonts", P.font); on("placement", P.placement); on("aspect", P.aspect); on("unit", P.unit); on("after", P.after); on("phrasing", P.phrasing); on("entrance", P.entrance); on("fillers", P.fillers); on("cards", String(+P.cards || 0)); syncSound();
+  syncPhrasing();
   $("flHelp").textContent = P.fillers === "show" ? "Shown in the quiet color, timed to the moment they are spoken." : "Left out of the captions; the words close up and the typing pauses while they are spoken.";
   if (data && P.fillers !== shownFillers) renderWords();
   const edited = Object.keys(diff()).length > 1;
   document.querySelectorAll("#presets .preset:not(.saved)").forEach((b) => { b.querySelector("b").textContent = b.dataset.p + (b.dataset.p === P.preset && edited ? " · edited" : ""); });
   markLooks(); syncThumb();
   $("undo").disabled = !hist.length; $("redo").disabled = !fut.length;
+}
+
+function syncPhrasing() {  // the pause slider only matters when pauses start phrases (or, on a Page, paragraphs)
+  const syn = P.phrasing === "syntax", page = P.placement === "page";
+  const sl = $("s-pauseBreak"); if (sl) sl.closest(".slider").style.display = syn && !page ? "none" : "";
+  $("phrasingNote").textContent = page
+    ? (syn ? "Page placement: a new paragraph starts only where a sentence ends and a long silence follows." : "Page placement: a long silence starts a new paragraph.")
+    : syn ? "Each sentence stays one phrase, however long you pause inside it. A sentence too long for the lines on screen splits at a comma, colon or dash."
+    : "A silence longer than the setting below starts a new phrase, as does a sentence end followed by a breath.";
 }
 
 // ---------- scene & drawing

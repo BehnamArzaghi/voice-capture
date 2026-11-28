@@ -2,7 +2,7 @@
 """Browser tests for the Library (index.html) and the caption studio (studio.html).
 
   python3 tests/run_tests.py            all tests; screenshots go to tests/shots/
-  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, words, cards, requests, thumb, sound)
+  python3 tests/run_tests.py themes     only the named groups (library, looks, follow, themes, words, phrasing, cards, requests, thumb, sound)
 
 Needs Playwright for Python and the Chrome that `tools/vc.py setup` installs. Exits non-zero when a check fails.
 """
@@ -204,6 +204,52 @@ async def t_words(p, base):
         C(not errs, f"words {name}: no page errors", errs); await b.close()
 
 
+async def t_phrasing(p, base):
+    """Phrases follow pauses (default) or syntax: a long pause mid-sentence splits a phrase only in the first."""
+    b, pg, errs = await open_studio(p, base)
+    run = """(args) => {
+      const [texts, P] = args; let t = 0;
+      const words = texts.map(([w, gap]) => { t += gap; const o = { w: ' ' + w, s: t, e: t + 0.3, gap, p: 1 }; t += 0.3; return o; });
+      const sc = VC.buildScene({ words, duration: t + 1 }, P, (c, f, wt, s) => s * 0.5 * [...c].length);
+      return sc.placement === 'page' ? sc.lines.map(L => (L.para ? '¶' : '') + L.words.map(w => w.text).join(' '))
+                                     : sc.phrases.map(ph => ph.words.map(w => w.text).join(' '));
+    }"""
+    talk = [["So", 0], ["the", .1], ["thing", .1], ["is...", .1], ["that", 3.0], ["creativity", .1], ["begins.", .1],
+            ["Whitehead", .5], ["calls", .1], ["it", .1], ["concrescence.", .1]]
+    pause = await pg.evaluate(run, [talk, {}])
+    C(pause == ["So the thing is...", "that creativity begins.", "Whitehead calls it concrescence."], "phrasing: Pauses splits at a long pause mid-sentence", pause)
+    syn = await pg.evaluate(run, [talk, {"phrasing": "syntax"}])
+    C(syn == ["So the thing is... that creativity begins.", "Whitehead calls it concrescence."], "phrasing: Syntax keeps a sentence whole across its pauses", syn)
+    low = await pg.evaluate(run, [talk, {"phrasing": "syntax", "preset": "Score", "punct": False}])
+    C(len(low) == 2 and low[1].startswith("whitehead"), "phrasing: Syntax reads the transcript even when a look lowercases it and hides punctuation", low)
+    long = [[x, .1] for x in "When the many become one, the novel entity arises from them all.".split()]
+    cut = await pg.evaluate(run, [long, {"phrasing": "syntax", "maxLines": 1}])
+    C(cut[0] == "When the many become one," and " ".join(cut) == " ".join(x for x, _ in long), "phrasing: a sentence too long for the screen splits at its comma", cut)
+    page = await pg.evaluate(run, [talk, {"phrasing": "syntax", "preset": "Manuscript"}])
+    C(not any(L.startswith("¶") for L in page), "phrasing: on a Page, Syntax starts no paragraph mid-sentence", page)
+    page = await pg.evaluate(run, [talk, {"preset": "Manuscript"}])
+    C(any(L.startswith("¶that") for L in page), "phrasing: on a Page, Pauses starts a paragraph at the long pause", page)
+    # the control
+    for name, w, h, mob in (("desk", 1440, 900, False), ("phone", 390, 844, True)):
+        if mob: await b.close(); b, pg, errs = await open_studio(p, base, w, h, mob)
+        await pg.click("#tabs [data-t=motion]"); await pg.wait_for_timeout(200)
+        n0 = await pg.evaluate("__studio.scene.phrases.length")
+        C(await pg.is_visible("#s-pauseBreak"), f"phrasing {name}: the pause slider shows with Pauses")
+        await pg.click("#phrasing [data-v=syntax]"); await pg.wait_for_timeout(500)
+        st = await pg.evaluate("() => ({p: __studio.P.phrasing, n: __studio.scene.phrases.length})")
+        C(st["p"] == "syntax" and st["n"] > 0, f"phrasing {name}: Syntax applies to the captions", [n0, st])
+        C(not await pg.is_visible("#s-pauseBreak") and "Each sentence" in await pg.inner_text("#phrasingNote"), f"phrasing {name}: the pause slider gives way to a note")
+        await (await pg.query_selector("#phrasing")).scroll_into_view_if_needed(); await pg.screenshot(path=f"{H.OUT}/phrasing_{name}.png")
+        await pg.click("#undo"); await pg.wait_for_timeout(300)
+        C(await pg.evaluate("__studio.P.phrasing") == "pause", f"phrasing {name}: Undo goes back to Pauses")
+    await pg.click("#phrasing [data-v=syntax]"); await pg.wait_for_timeout(300)
+    await pg.evaluate("window.__studio.flush()"); await pg.wait_for_timeout(400)
+    body = next((s for s in reversed(H.SAVES) if '"audioId"' in s), "")
+    doc = json.loads(body[body.index('{"v":1,"audioId"'):body.rindex("}") + 1]) if body else {}
+    C((doc.get("params") or {}).get("phrasing") == "syntax", "phrasing: the choice is saved with the look in edits.json", doc.get("params"))
+    C(not errs, "phrasing: no page errors", errs); await b.close()
+
+
 async def t_cards(p, base):
     b, pg, errs = await open_studio(p, base)
     await pg.click("#tabs [data-t=voice]"); await pg.click('#cards [data-v="1"]'); await pg.wait_for_timeout(400)
@@ -348,7 +394,7 @@ async def t_sound(p, base):
     H.CLEANCOPIES = True
 
 
-GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "words": t_words, "cards": t_cards, "requests": t_requests, "thumb": t_thumb, "sound": t_sound}
+GROUPS = {"library": t_library, "looks": t_looks, "follow": t_follow, "themes": t_themes, "words": t_words, "phrasing": t_phrasing, "cards": t_cards, "requests": t_requests, "thumb": t_thumb, "sound": t_sound}
 
 
 async def main(names):

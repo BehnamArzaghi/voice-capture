@@ -27,6 +27,7 @@
     semantic: 1, recede: 0.85, emphasis: 0.45,
     weightAmt: 0.8, sizeAmt: 0.25, lift: 0.5, tilt: 0.25, stretch: 0.4, attack: 0.5, trace: 0,
     unit: "letter", entrance: "instant", enterMs: 220, after: "live", ghost: 0, pauseBreak: 0.7, hold: 1.0,
+    phrasing: "pause",  // what starts a new phrase: "pause" (a silence of pauseBreak, or a sentence end) or "syntax" (sentence ends only)
     // live energy (0 = off): how typed letters keep answering the voice after they land
     linger: 0, ripple: 0, sway: 0, shimmer: 0, glow: 0,
     fillers: "hide", edits: {}, thEdits: {}, thOff: [],
@@ -144,6 +145,17 @@
     if (P.textCase === "lower") t = t.toLowerCase(); else if (P.textCase === "upper") t = t.toUpperCase();
     return t;
   }
+  // ---------- syntax (read from the transcript's own text, before a look lowercases it or hides punctuation)
+  const ABBR = /^(mr|mrs|ms|dr|prof|st|vs|etc|cf|no|vol|approx|e\.g|i\.e)\.$/i;
+  const bare = (w) => String((w && (w.raw != null ? w.raw : w.text)) || "").trim().replace(/["'”’)\]]+$/u, "");
+  function sentenceEnd(w, nx) {  // does a sentence end after w (nx: the word that follows)?
+    const t = bare(w);
+    if (/[?!]$/.test(t)) return true;
+    if (!/[.…]$/.test(t) || ABBR.test(t)) return false;
+    // a period or ellipsis ends it when the next word opens a sentence (capital letter or digit); "the... the" carries on
+    return !nx || /^["'“‘(\[]*[\p{Lu}\p{N}]/u.test(String(nx.raw != null ? nx.raw : nx.text).trim());
+  }
+  const clauseEnd = (w) => { const t = bare(w); return /[,;:—–…]$/.test(t) || /\.\.$/.test(t) || /^[-—–]+$/.test(t); };
   const ease = (p) => 1 - Math.pow(1 - clamp(p, 0, 1), 3); // decelerate, no overshoot
 
   // ---------- scene
@@ -189,7 +201,7 @@
       const ed = P.edits[i];
       // pauses count a hidden filler as speech (phrasing matches the shown version); sentence breaks use the visible gap
       const vgap = Math.max(0, d.s - lastE); lastE = d.e;
-      const w = { i, text, s: d.s, e: d.e, gap: d.gap || 0, vgap, fn: (!!d.fn || !!d.fl) && ed !== "emph" && ed !== "normal", th: d.th, fl: !!d.fl,
+      const w = { i, text, raw, s: d.s, e: d.e, gap: d.gap || 0, vgap, fn: (!!d.fn || !!d.fl) && ed !== "emph" && ed !== "normal", th: d.th, fl: !!d.fl,
         emph: ed === "emph" || (ed !== "normal" && ed !== "quiet" && !d.fn && (d.emph || 0) >= thr), quiet: ed === "quiet",
         pitch: d.pitch, slope: d.slope || 0, stretch: d.stretch || 0, p: d.p };
       const te = themeIndex((P.thEdits || {})[i], themes);
@@ -227,14 +239,42 @@
     const lines = [];
     const newLine = (w, para) => { const L = { words: [w], width: w.width, para: !!para }; lines.push(L); return L; };
     let phrases = [], cur = null;
+    const syntax = P.phrasing === "syntax";
     if (placement === "page") {
       let L = null;
       for (const w of words) {
-        const para = L && w.gap >= Math.max(1.6, P.pauseBreak * 2.5);
+        // a long silence starts a paragraph; with syntax phrasing, only where a sentence has ended
+        const para = L && w.gap >= Math.max(1.6, P.pauseBreak * 2.5) && (!syntax || sentenceEnd(L.words[L.words.length - 1], w));
         if (!L || para || L.width + space + w.width > maxW) { L = newLine(w, para); continue; }
         L.words.push(w); L.width += space + w.width;
       }
       lines.forEach((L) => { L.start = L.words[0].s; L.end = L.words[L.words.length - 1].e; });
+    } else if (syntax) {
+      // syntax phrasing: each sentence is one phrase, whatever pauses fall inside it. A sentence too long for the lines on
+      // screen splits at its last clause boundary (comma, colon, semicolon, dash, ellipsis) after at least three words,
+      // else at the word that no longer fits.
+      const flow = (ws) => {  // lay words into lines; null when they need more than maxLines
+        const ls = []; let L = null;
+        for (const w of ws) {
+          if (L && L.width + space + w.width <= maxW) { L.words.push(w); L.width += space + w.width; continue; }
+          if (ls.length >= maxLines) return null;
+          L = { words: [w], width: w.width }; ls.push(L);
+        }
+        return ls;
+      };
+      let group = [];
+      const close = () => { if (group.length) phrases.push({ words: group, lines: flow(group) || [{ words: group, width: group.reduce((x, w) => x + w.width, 0) }] }); group = []; };
+      for (const w of words) {
+        if (group.length && sentenceEnd(group[group.length - 1], w)) close();
+        if (!group.length || flow(group.concat(w))) { group.push(w); continue; }
+        let cut = -1;
+        for (let q = group.length - 1; q >= 2; q--) if (clauseEnd(group[q])) { cut = q; break; }
+        if (cut < 0) { close(); group = [w]; continue; }
+        const rest = group.slice(cut + 1); group = group.slice(0, cut + 1); close(); group = rest;
+        if (!flow(group.concat(w))) close();
+        group.push(w);
+      }
+      close();
     } else {
       for (const w of words) {
         const last = cur && cur.words[cur.words.length - 1];
